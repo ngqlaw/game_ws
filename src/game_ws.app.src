@@ -1,0 +1,17 @@
+{application, game_ws,
+  [{description, "An websocket library for special game"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {mod, {game_ws_app, []}},
+    {applications, [
+      kernel,
+      stdlib,
+      cowboy
+    ]},
+    {env,[]},
+    {modules, []},
+
+    {maintainers, []},
+    {licenses, ["Apache 2.0"]},
+    {links, []}
+ ]}.
