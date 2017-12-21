@@ -12,18 +12,31 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/0, start_child/2]).
+-export([start_link/1, start_child/3, stop/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
--define(SERVER, ?MODULE).
+-define(CHILD(Mod), {Mod, {Mod, start_link, []}, temporary, 5000, worker, [Mod]}).
 
 %%%===================================================================
 %%% API functions
 %%%===================================================================
-start_child(Handler, ParentPid) ->
-    supervisor:start_child(?SERVER, [Handler, ParentPid]).
+start_child(Srever, Handler, ParentPid) ->
+    supervisor:start_child(Srever, [Handler, ParentPid]).
+
+stop(Srever) ->
+  Children = supervisor:which_children(Srever),
+  N = lists:foldl(fun
+    ({_, Pid, _, _}, Acc) when is_pid(Pid) ->
+      case erlang:is_process_alive(Pid) of 
+        true ->
+          Pid ! {soft_stop_immediately, self()},
+          Acc + 1;
+        false -> Acc
+      end  
+  end, 0, Children),
+  loop_stop(N). 
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -31,10 +44,10 @@ start_child(Handler, ParentPid) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec(start_link() ->
+-spec(start_link(Opt :: list()) ->
   {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
-start_link() ->
-  supervisor:start_link({local, ?SERVER}, ?MODULE, []).
+start_link(Opt) ->
+  supervisor:start_link(?MODULE, [Opt]).
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -57,22 +70,32 @@ start_link() ->
   }} |
   ignore |
   {error, Reason :: term()}).
-init([]) ->
-  RestartStrategy = simple_one_for_one,
-  MaxRestarts = 3,
-  MaxSecondsBetweenRestarts = 10,
-
-  SupFlags = {RestartStrategy, MaxRestarts, MaxSecondsBetweenRestarts},
-
-  Restart = temporary,
-  Shutdown = 5000,
-  Type = worker,
-
-  AChild = {game_handler, {game_handler, start_link, []},
-    Restart, Shutdown, Type, [game_handler]},
-
-  {ok, {SupFlags, [AChild]}}.
+init([Opt]) ->
+  %% 启动网络进程
+  Ref = proplists:get_value(ref, Opt, undefined),
+  Module = proplists:get_value(module, Opt, undefined),
+  Shutdown = proplists:get_value(shutdown, Opt, 0),
+  Port = proplists:get_value(port, Opt, 8080),
+  Host = proplists:get_value(host, Opt, '_'),
+  Path = proplists:get_value(path, Opt, "/"),
+  Dispatch = cowboy_router:compile([
+    {Host, [
+      {Path, game_ws_handler, [{handler, Module}, {shutdown, Shutdown}, {sup_pid, self()}]}
+    ]}
+  ]),
+  {ok, _} = cowboy:start_clear(Ref, [{port, Port}], #{
+    env => #{dispatch => Dispatch}
+  }),
+  {ok, {{simple_one_for_one, 3, 10}, [?CHILD(game_handler)]}}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
+loop_stop(N) when N > 0 ->
+  receive
+    ok -> loop_stop(N - 1)
+  after 5000 ->
+    {error, timeout}  
+  end;
+loop_stop(_) ->
+  ok.

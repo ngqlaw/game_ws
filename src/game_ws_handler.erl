@@ -18,16 +18,24 @@
 init(Req, Opts) ->
   Handler = proplists:get_value(handler, Opts),
   Shutdown = proplists:get_value(shutdown, Opts),
+  SupPid = proplists:get_value(sup_pid, Opts),
   State = #{
     handler => Handler,
-    shutdown => Shutdown
+    shutdown => Shutdown,
+    sup_pid => SupPid
   },
   {cowboy_websocket, Req, State}.
 
-websocket_init(#{handler := Handler} = State) ->
-  case game_ws_sup:start_child(Handler, self()) of
+websocket_init(#{handler := Handler, sup_pid := SupPid} = State) ->
+  case game_ws_sup:start_child(SupPid, Handler, self()) of
     {ok, HandlePid} ->
       {ok, State#{pid => HandlePid}};
+    {ok, HandlePid, Reply} ->
+      {reply, {binary, Reply}, State#{pid => HandlePid}};
+    {error, {already_started, HandlePid}} ->
+      {ok, State#{pid => HandlePid}};
+    {error, {already_started, HandlePid, Reply}} ->
+      {reply, {binary, Reply}, State#{pid => HandlePid}};
     _ ->
       {stop, State}
   end.
@@ -46,6 +54,15 @@ websocket_info({"send_msg", Msg}, State) ->
   {reply, {binary, Msg}, State};
 websocket_info("disconnect", State) ->
   {stop, State};
+websocket_info({control, Control}, #{handler := Handler, pid := Pid} = State) ->
+  case game_handler:handle_control(Pid, Handler, Control) of
+    ok ->
+      {ok, State};
+    {ok, Reply} ->
+      {reply, {binary, Reply}, State};
+    stop ->
+      {stop, State}
+  end;  
 websocket_info(_Info, State) ->
   {ok, State}.
 
