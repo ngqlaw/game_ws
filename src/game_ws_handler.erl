@@ -27,7 +27,7 @@ init(Req, Opts) ->
   },
   {cowboy_websocket, Req, State}.
 
-websocket_init(#{handler := Handler, sup_pid := SupPid} = State) ->
+websocket_init(State) ->
   case game_ws_sup:start_child(State, self()) of
     {ok, HandlePid, NewState} ->
       do_reply(NewState, HandlePid);
