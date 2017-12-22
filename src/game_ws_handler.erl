@@ -20,6 +20,7 @@ init(Req, Opts) ->
   Shutdown = proplists:get_value(shutdown, Opts),
   SupPid = proplists:get_value(sup_pid, Opts),
   State = #{
+    init => Req,
     handler => Handler,
     shutdown => Shutdown,
     sup_pid => SupPid
@@ -27,18 +28,22 @@ init(Req, Opts) ->
   {cowboy_websocket, Req, State}.
 
 websocket_init(#{handler := Handler, sup_pid := SupPid} = State) ->
-  case game_ws_sup:start_child(SupPid, Handler, self()) of
-    {ok, HandlePid} ->
-      {ok, State#{pid => HandlePid}};
-    {ok, HandlePid, Reply} ->
-      {reply, {binary, Reply}, State#{pid => HandlePid}};
-    {error, {already_started, HandlePid}} ->
-      {ok, State#{pid => HandlePid}};
-    {error, {already_started, HandlePid, Reply}} ->
-      {reply, {binary, Reply}, State#{pid => HandlePid}};
+  case game_ws_sup:start_child(State, self()) of
+    {ok, HandlePid, NewState} ->
+      do_reply(NewState, HandlePid);
+    {error, {already_started, HandlePid, NewState}} ->
+      do_reply(NewState, HandlePid);
     _ ->
       {stop, State}
   end.
+
+do_reply(State, Pid) ->
+  case maps:take(reply, State) of
+    {Reply, NewState} ->
+      {reply, {binary, Reply}, NewState#{pid => Pid}};
+    error ->
+      {ok, State#{pid => Pid}}
+  end.  
 
 websocket_handle(Msg, #{handler := Handler, pid := Pid} = State) ->
   case game_handler:handle_outside(Pid, Handler, Msg) of

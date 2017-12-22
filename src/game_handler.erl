@@ -15,7 +15,7 @@
 | {reply, binary(), State}
 | {stop, State}.
 
--callback init(pid()) -> {ok, State::any()} | {reply, Reply::binary()}
+-callback init(Req::map(), pid()) -> {ok, State::any()} | {reply, Reply::binary()}
 | {error, {already_started, pid()} | {already_started, pid(), Reply::binary()} | term()}.
 
 -callback control(term(), State) -> call_result(State) when State::any().
@@ -75,8 +75,8 @@ stop(Server, Handler, Shutdown, Reason) ->
 %%--------------------------------------------------------------------
 -spec(start_link(any(), pid()) ->
   {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
-start_link(Handler, ParentPid) ->
-  proc_lib:start_link(?MODULE, init, [self(), Handler, ParentPid]).
+start_link(SocketState, ParentPid) ->
+  proc_lib:start_link(?MODULE, init, [self(), SocketState, ParentPid]).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -99,13 +99,14 @@ start_link(Handler, ParentPid) ->
 init(_) ->
   {ok, #state{}}.
 
--spec(init(ParentPid :: pid(), Handler :: atom(), SocketPid :: pid()) -> no_return()).
-init(ParentPid, Handler, SocketPid) ->
+-spec(init(ParentPid :: pid(), Handler :: map(), SocketPid :: pid()) -> no_return()).
+init(ParentPid, #{handler := Handler} = Socket, SocketPid) ->
   erlang:put(socket_pid, {ok, SocketPid}),
-  case Handler:init(self()) of
+  {Init, NewSocket} = maps:take(init, Socket),
+  case Handler:init(Init, self()) of
     {ok, HandleState} ->
       Ref = erlang:monitor(process, ParentPid),
-      proc_lib:init_ack(ParentPid, {ok, self()}),
+      proc_lib:init_ack(ParentPid, {ok, self(), NewSocket}),
       gen_server:enter_loop(?MODULE, [], #state{
         monitor_ref = Ref,
         socket_pid = SocketPid,
@@ -113,7 +114,7 @@ init(ParentPid, Handler, SocketPid) ->
       });
     {reply, Reply, HandleState} ->
       Ref = erlang:monitor(process, ParentPid),
-      proc_lib:init_ack(ParentPid, {ok, self(), Reply}),
+      proc_lib:init_ack(ParentPid, {ok, self(), NewSocket#{reply => Reply}}),
       gen_server:enter_loop(?MODULE, [], #state{
         monitor_ref = Ref,
         socket_pid = SocketPid,
@@ -122,9 +123,9 @@ init(ParentPid, Handler, SocketPid) ->
     {error, {already_started, Pid}} ->
       case gen_server:call(Pid, {reconnect, Handler, ParentPid}) of
         ok ->
-          proc_lib:init_ack(ParentPid, {error, {already_started, Pid}});
+          proc_lib:init_ack(ParentPid, {error, {already_started, Pid, NewSocket}});
         {ok, Reply} ->
-          proc_lib:init_ack(ParentPid, {error, {already_started, Pid, Reply}});
+          proc_lib:init_ack(ParentPid, {error, {already_started, Pid, NewSocket#{reply => Reply}}});
         stop ->
           proc_lib:init_ack(ParentPid, {error, stop})
       end;

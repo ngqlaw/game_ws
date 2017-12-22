@@ -11,7 +11,7 @@ An websocket library for special game
 | {stop, State}.
 
 %% @doc 初始化
--callback init(pid()) -> {ok, State::any()} | {reply, Reply::binary()}
+-callback init(Req::map(), pid()) -> {ok, State::any()} | {reply, Reply::binary()}
 | {error, {already_started, pid()} | {already_started, pid(), Reply::binary()} | term()}.
 
 函数传入的pid可用来支持以下调用：

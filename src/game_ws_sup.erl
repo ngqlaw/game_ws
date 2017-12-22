@@ -12,7 +12,7 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/1, start_child/3, stop/1]).
+-export([start_link/1, start_child/2, stop/1]).
 
 %% Supervisor callbacks
 -export([init/1]).
@@ -22,8 +22,9 @@
 %%%===================================================================
 %%% API functions
 %%%===================================================================
-start_child(Srever, Handler, ParentPid) ->
-    supervisor:start_child(Srever, [Handler, ParentPid]).
+start_child(State, ParentPid) ->
+  {Srever, NewState} = maps:take(sup_pid, State),
+  supervisor:start_child(Srever, [NewState, ParentPid]).
 
 stop(Srever) ->
   Children = supervisor:which_children(Srever),
