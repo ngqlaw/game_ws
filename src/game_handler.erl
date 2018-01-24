@@ -11,18 +11,22 @@
 
 -behaviour(gen_server).
 
--type call_result(State) :: {ok, State}
+-type (call_result(State) :: {ok, State}
 | {reply, binary(), State}
-| {stop, State}.
+| {stop, State}).
 
--callback init(Req::map(), pid()) -> {ok, State::any()} | {reply, Reply::binary()}
-| {error, {already_started, pid()} | {already_started, pid(), Reply::binary()} | term()}.
+%% 初始化进程内存
+-callback (init(Req::map(), pid()) -> {ok, State::any()} | {reply, Reply::binary()}
+| {error, {already_started, pid()} | term()}).
 
--callback control(term(), State) -> call_result(State) when State::any().
+%% 调用game_ws:control/2时候产生的消息在这里处理
+-callback (control(term(), State) -> call_result(State) when State::any()).
 
--callback handle(binary(), State) -> call_result(State) when State::any().
+%% 通信消息处理
+-callback (handle(binary(), State) -> call_result(State) when State::any()).
 
--callback terminate(Reason::any(), State) -> ok when State::any().
+%% 结束通信
+-callback (terminate(Reason::any(), State) -> ok when State::any()).
 -optional_callbacks([terminate/2]).
 
 %% API
@@ -53,17 +57,21 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
+%% 给网络服务进程发送事件消息
 handle_inside(Server, Event) when Server == self() ->
   inside(Event);
 handle_inside(Server, Event) ->
   gen_server:call(Server, {handle_inside, Event}).
 
+%% 处理通信事件消息
 handle_outside(Server, Handler, Msg) ->  
   gen_server:call(Server, {handle_outside, Handler, Msg}).
 
+%% 自定义消息
 handle_control(Server, Handler, Msg) ->  
   gen_server:call(Server, {handle_control, Handler, Msg}).  
 
+%% 停止服务
 stop(Server, Handler, Shutdown, Reason) ->
   gen_server:call(Server, {stop, Handler, Shutdown, Reason}).  
 
@@ -77,27 +85,6 @@ stop(Server, Handler, Shutdown, Reason) ->
   {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
 start_link(SocketState, ParentPid) ->
   proc_lib:start_link(?MODULE, init, [self(), SocketState, ParentPid]).
-
-%%%===================================================================
-%%% gen_server callbacks
-%%%===================================================================
-
-%%--------------------------------------------------------------------
-%% @private
-%% @doc
-%% Initializes the server
-%%
-%% @spec init(Args) -> {ok, State} |
-%%                     {ok, State, Timeout} |
-%%                     ignore |
-%%                     {stop, Reason}
-%% @end
-%%--------------------------------------------------------------------
--spec(init(Args :: term()) ->
-  {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
-  {stop, Reason :: term()} | ignore).
-init(_) ->
-  {ok, #state{}}.
 
 -spec(init(ParentPid :: pid(), Handler :: map(), SocketPid :: pid()) -> no_return()).
 init(ParentPid, #{handler := Handler} = Socket, SocketPid) ->
@@ -132,6 +119,27 @@ init(ParentPid, #{handler := Handler} = Socket, SocketPid) ->
     {error, Reason} ->
       proc_lib:init_ack(ParentPid, {error, Reason})
   end.
+
+%%%===================================================================
+%%% gen_server callbacks
+%%%===================================================================
+
+%%--------------------------------------------------------------------
+%% @private
+%% @doc
+%% Initializes the server
+%%
+%% @spec init(Args) -> {ok, State} |
+%%                     {ok, State, Timeout} |
+%%                     ignore |
+%%                     {stop, Reason}
+%% @end
+%%--------------------------------------------------------------------
+-spec(init(Args :: term()) ->
+  {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
+  {stop, Reason :: term()} | ignore).
+init(_) ->
+  {ok, #state{}}.
 
 %%--------------------------------------------------------------------
 %% @private
