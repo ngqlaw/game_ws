@@ -17,7 +17,7 @@
 %% Supervisor callbacks
 -export([init/1]).
 
--define(CHILD(Mod), {Mod, {Mod, start_link, []}, temporary, 5000, worker, [Mod]}).
+-define(CHILD(Mod, Handler), {Mod, {Mod, start_link, [Handler]}, temporary, 5000, worker, [Mod]}).
 
 %%%===================================================================
 %%% API functions
@@ -30,12 +30,10 @@ stop(Srever) ->
   Children = supervisor:which_children(Srever),
   N = lists:foldl(fun
     ({_, Pid, _, _}, Acc) when is_pid(Pid) ->
-      case erlang:is_process_alive(Pid) of 
-        true ->
-          Pid ! {soft_stop_immediately, self()},
-          Acc + 1;
-        false -> Acc
-      end  
+      case catch gen_server:call(Pid, {soft_stop_immediately, self()}) of
+        ok -> Acc + 1;
+        _ -> Acc
+      end
   end, 0, Children),
   loop_stop(N). 
 
@@ -75,19 +73,18 @@ init([Opt]) ->
   %% 启动网络进程
   Ref = proplists:get_value(ref, Opt, undefined),
   Module = proplists:get_value(module, Opt, undefined),
-  Shutdown = proplists:get_value(shutdown, Opt, 0),
   Port = proplists:get_value(port, Opt, 8080),
   Host = proplists:get_value(host, Opt, '_'),
   Path = proplists:get_value(path, Opt, "/"),
   Dispatch = cowboy_router:compile([
     {Host, [
-      {Path, game_ws_handler, [{handler, Module}, {shutdown, Shutdown}, {sup_pid, self()}]}
+      {Path, game_ws_handler, [{sup_pid, self()}]}
     ]}
   ]),
   {ok, _} = cowboy:start_clear(Ref, [{port, Port}], #{
     env => #{dispatch => Dispatch}
   }),
-  {ok, {{simple_one_for_one, 3, 10}, [?CHILD(game_handler)]}}.
+  {ok, {{simple_one_for_one, 3, 10}, [?CHILD(game_handler, Module)]}}.
 
 %%%===================================================================
 %%% Internal functions

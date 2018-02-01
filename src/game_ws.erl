@@ -10,7 +10,12 @@
 
 %% API exports
 -export([start_server/2, stop_server/1]).
--export([send_msg/2, disconnect/1, control/2]).
+-export([
+  send_msg/2, 
+  disconnect/1, 
+  call/2,
+  cast/2
+]).
 
 -define(CHILD(Id, Mod, Opt), {Id, {Mod, start_link, [Opt]}, permanent, 5000, supervisor, [Mod]}).
 
@@ -38,17 +43,28 @@ stop_server(Ref) ->
 %% 发送信息
 -spec(send_msg(Server :: pid(), Msg :: binary()) -> ok).
 send_msg(Server, Msg) ->
-  game_handler:handle_inside(Server, {"send_msg", Msg}).
+  game_handler:event(Server, {"send_msg", Msg}).
 
 %% 关闭连接
 -spec(disconnect(Server :: pid()) -> ok).
 disconnect(Server) ->
-  game_handler:handle_inside(Server, "disconnect").
+  gen_server:event(Server, "disconnect").
 
-%% 自定义控制
--spec(control(Server :: pid(), Control :: any()) -> ok).
-control(Server, Control) ->
-  game_handler:handle_inside(Server, {control, Control}).
+%% 发送阻塞消息
+-spec(call(Server :: pid(), Event :: any()) -> {error, timeout} | term()).
+call(Server, Event) ->
+  Ref = erlang:make_ref(),
+  game_handler:event(Server, {call, self(), Ref, Event}),
+  receive
+    {ok, Ref, Reply} -> Reply
+  after 5000 ->
+    {error, timeout}
+  end.
+
+%% 发送非阻塞消息
+-spec(cast(Server :: pid(), Event :: any()) -> ok).
+cast(Server, Event) ->
+  game_handler:event(Server, {cast, Event}).
 
 %%====================================================================
 %% Internal functions
