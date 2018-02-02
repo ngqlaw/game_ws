@@ -83,8 +83,9 @@ init([Opt]) ->
       {Path, game_ws_handler, [{sup_pid, self()}, {shutdown, Shutdown}]}
     ]}
   ]),
-  {ok, _} = cowboy:start_clear(Ref, [{port, Port}, {idle_timeout, Timeout}], #{
-    env => #{dispatch => Dispatch}
+  {ok, _} = cowboy:start_clear(Ref, [{port, Port}], #{
+    env => #{dispatch => Dispatch},
+    idle_timeout => Timeout
   }),
   {ok, {{simple_one_for_one, 3, 10}, [?CHILD(game_handler, Module)]}}.
 
