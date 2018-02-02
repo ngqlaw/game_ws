@@ -14,6 +14,8 @@ Usage
 | {reply, Message::binary(), State}
 | {stop, State}).
 
+-type (ack_resutl(State) :: {ok, State} | {reply, Message::binary(), State} | any()).
+
 %% 初始化进程内存
 -callback (init(Req::map(), pid()) -> {ok, State::any()} | {reply, Reply::binary(), State::any()}
 | {already_started, Handler::pid()} | {already_started, Handler::pid(), Event::term()}
@@ -32,7 +34,19 @@ Usage
 %% 消息处理
 -callback (handle({tcp, binary()} | term(), State) -> handle_result(State) when State::any()).
 
-%% 结束通信
+%% ping(消息已回复)
+-callback (ping(Payload::binary(), State) -> ack_resutl(State) when State::any()).
+-optional_callbacks([ping/2]).
+
+%% pong(消息已回复)
+-callback (pong(Payload::binary(), State) -> ack_resutl(State) when State::any()).
+-optional_callbacks([pong/2]).
+
+%% 通信结束
+-callback (close(Reason::any(), State) -> ok when State::any()).
+-optional_callbacks([close/2]).
+
+%% 服务结束
 -callback (terminate(Reason::any(), State) -> ok when State::any()).
 -optional_callbacks([terminate/2]).
 ```
@@ -46,7 +60,7 @@ Usage
 
   Opt可以配置的参数：
   module    - 回调模块
-  shutdown  - 进程延时关闭时间(秒),默认0
+  shutdown  - 进程延时关闭时间(毫秒),默认0
   timeout   - 网络进程待机时间(毫秒),默认60000
   port      - 服务端口,例如:9999
   host      - 域,例如:'_' (参照cowboy路由设置)

@@ -48,7 +48,7 @@ send_msg(Server, Msg) ->
 %% 关闭连接
 -spec(disconnect(Server :: pid()) -> ok).
 disconnect(Server) ->
-  gen_server:event(Server, "disconnect").
+  game_handler:event(Server, "disconnect").
 
 %% 发送阻塞消息
 -spec(call(Server :: pid(), Event :: any()) -> {error, timeout} | term()).
