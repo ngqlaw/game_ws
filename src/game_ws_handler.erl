@@ -21,10 +21,16 @@ init(Req, Opts) ->
     _ -> 0
   end,
   SupPid = proplists:get_value(sup_pid, Opts),
+  MsgType = case proplists:get_value(msg_type, Opts, text) of
+    text -> text;
+    binary -> binary;
+    _ -> text
+  end,
   State = #{
     init => Req,
     sup_pid => SupPid,
-    shutdown => Shutdown
+    shutdown => Shutdown,
+    msg_type => MsgType
   },
   {cowboy_websocket, Req, State}.
 
@@ -38,31 +44,31 @@ websocket_init(State) ->
       {stop, State}
   end.
 
-do_reply(State, Pid) ->
+do_reply(#{msg_type := MsgType} = State, Pid) ->
   case maps:take(reply, State) of
     {Reply, NewState} ->
-      {reply, {binary, Reply}, NewState#{pid => Pid}};
+      {reply, {MsgType, Reply}, NewState#{pid => Pid}};
     error ->
       {ok, State#{pid => Pid}}
   end.
 
-websocket_handle(Msg, #{pid := Pid} = State) ->
+websocket_handle(Msg, #{pid := Pid, msg_type := MsgType} = State) ->
   case game_handler:net_message(Pid, Msg) of
     ok ->
       {ok, State};
     {ok, _Reply} -> %% tcp消息忽略返回
       {ok, State};
     {ok, _Reply, Message} -> %% tcp消息忽略返回
-      {reply, {binary, Message}, State};
+      {reply, {MsgType, Message}, State};
     {reply, Message} ->
-      {reply, {binary, Message}, State};
+      {reply, {MsgType, Message}, State};
     stop ->
       {stop, State}
   end.
 
 websocket_info("disconnect", State) ->
   {stop, State};
-websocket_info({call, ReplyPid, Ref, SysMsg}, #{pid := Pid} = State) ->
+websocket_info({call, ReplyPid, Ref, SysMsg}, #{pid := Pid, msg_type := MsgType} = State) ->
   case game_handler:sys_message(Pid, SysMsg) of
     ok ->
       ReplyPid ! {ok, Ref, ok},
@@ -72,24 +78,24 @@ websocket_info({call, ReplyPid, Ref, SysMsg}, #{pid := Pid} = State) ->
       {ok, State};
     {ok, Reply, Message} ->
       ReplyPid ! {ok, Ref, Reply},
-      {reply, {binary, Message}, State};
+      {reply, {MsgType, Message}, State};
     {reply, Message} ->
       ReplyPid ! {ok, Ref, ok},
-      {reply, {binary, Message}, State};
+      {reply, {MsgType, Message}, State};
     stop ->
       ReplyPid ! {ok, Ref, process_down},
       {stop, State}
   end;
-websocket_info({cast, SysMsg}, #{pid := Pid} = State) ->
+websocket_info({cast, SysMsg}, #{pid := Pid, msg_type := MsgType} = State) ->
   case game_handler:sys_message(Pid, SysMsg) of
     ok ->
       {ok, State};
     {ok, _Reply} -> 
       {ok, State};
     {ok, _Reply, Message} ->
-      {reply, {binary, Message}, State};
+      {reply, {MsgType, Message}, State};
     {reply, Message} ->
-      {reply, {binary, Message}, State};
+      {reply, {MsgType, Message}, State};
     stop ->
       {stop, State}
   end;

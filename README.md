@@ -62,6 +62,7 @@ Usage
   module    - 回调模块
   shutdown  - 进程延时关闭时间(毫秒),默认0
   timeout   - 网络进程待机时间(毫秒),默认60000
+  msg_type  - 返回消息类型: text | binary,默认text
   port      - 服务端口,例如:9999
   host      - 域,例如:'_' (参照cowboy路由设置)
   path      - 路径,例如:"/path" (参照cowboy路由设置)

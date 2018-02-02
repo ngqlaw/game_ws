@@ -73,14 +73,14 @@ init([Opt]) ->
   %% 启动网络进程
   Ref = proplists:get_value(ref, Opt, undefined),
   Module = proplists:get_value(module, Opt, undefined),
-  Shutdown = proplists:get_value(shutdown, Opt, 0),
   Timeout = proplists:get_value(timeout, Opt, 60000),
   Port = proplists:get_value(port, Opt, 8080),
   Host = proplists:get_value(host, Opt, '_'),
   Path = proplists:get_value(path, Opt, "/"),
+  BaseOtp = normalize_options(Opt, [{sup_pid, self()}]),
   Dispatch = cowboy_router:compile([
     {Host, [
-      {Path, game_ws_handler, [{sup_pid, self()}, {shutdown, Shutdown}]}
+      {Path, game_ws_handler, BaseOtp}
     ]}
   ]),
   {ok, _} = cowboy:start_clear(Ref, [{port, Port}], #{
@@ -100,3 +100,11 @@ loop_stop(N) when N > 0 ->
   end;
 loop_stop(_) ->
   ok.
+
+normalize_options([{shutdown, V}|T], Opt) ->
+  normalize_options(T, [{shutdown, V}|Opt]);
+normalize_options([{msg_type, V}|T], Opt) ->
+  normalize_options(T, [{msg_type, V}|Opt]);
+normalize_options([_|T], Opt) ->
+  normalize_options(T, Opt);
+normalize_options([], Opt) -> Opt.
