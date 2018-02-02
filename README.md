@@ -8,9 +8,11 @@ Usage
 
 使用的时候需要先设置回调模块
 ```
--type call_result(State) :: {ok, State}
-| {reply, binary(), State}
-| {stop, State}.
+-type (handle_result(State) :: {ok, Reply::term(), Message::binary(), State}
+| {ok, Reply::term(), State}
+| {ok, State}
+| {reply, Message::binary(), State}
+| {stop, State}).
 
 %% 初始化进程内存
 -callback (init(Req::map(), pid()) -> {ok, State::any()} | {reply, Reply::binary(), State::any()}
@@ -44,7 +46,8 @@ Usage
 
   Opt可以配置的参数：
   module    - 回调模块
-  shutdown  - 进程延时关闭时间(秒)
+  shutdown  - 进程延时关闭时间(秒),默认0
+  timeout   - 网络进程待机时间(毫秒),默认60000
   port      - 服务端口,例如:9999
   host      - 域,例如:'_' (参照cowboy路由设置)
   path      - 路径,例如:"/path" (参照cowboy路由设置)
