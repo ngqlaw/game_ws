@@ -12,14 +12,15 @@ Usage
 | {ok, Reply::term(), State}
 | {ok, State}
 | {reply, Message::binary(), State}
-| {stop, State}).
+| {stop, Reason::term(), Reply::term(), State}
+| {stop, Reason::term(), State}).
 
 -type (ack_resutl(State) :: {ok, State} | {reply, Message::binary(), State} | any()).
 
 %% 初始化进程内存
 -callback (init(Req::map(), pid()) -> {ok, State::any()} | {reply, Reply::binary(), State::any()}
 | {already_started, Handler::pid()} | {already_started, Handler::pid(), Event::term()}
-| {error, Error::term()}).
+| {stop, Error::term()}).
 
 函数传入的pid可用来支持以下调用：
 %% 发送信息

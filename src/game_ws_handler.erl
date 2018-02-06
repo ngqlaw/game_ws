@@ -82,6 +82,9 @@ websocket_info({call, ReplyPid, Ref, SysMsg}, #{pid := Pid, msg_type := MsgType}
     {reply, Message} ->
       ReplyPid ! {ok, Ref, ok},
       {reply, {MsgType, Message}, State};
+    {stop, Reply} ->
+      ReplyPid ! {ok, Ref, Reply},
+      {stop, State};
     stop ->
       ReplyPid ! {ok, Ref, process_down},
       {stop, State}
@@ -96,12 +99,13 @@ websocket_info({cast, SysMsg}, #{pid := Pid, msg_type := MsgType} = State) ->
       {reply, {MsgType, Message}, State};
     {reply, Message} ->
       {reply, {MsgType, Message}, State};
+    {stop, _Reply} ->
+      {stop, State};
     stop ->
       {stop, State}
   end;
 websocket_info(_, State) ->
   {ok, State}.
 
-terminate(Reason, _Req, #{pid := Pid}) ->
-  game_handler:stop(Pid, Reason),
+terminate(_Reason, _Req, _State) ->
   ok.
