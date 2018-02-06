@@ -62,6 +62,8 @@ websocket_handle(Msg, #{pid := Pid, msg_type := MsgType} = State) ->
       {reply, {MsgType, Message}, State};
     {reply, Message} ->
       {reply, {MsgType, Message}, State};
+    {stop, _Reply} ->
+      {stop, State};
     stop ->
       {stop, State}
   end.

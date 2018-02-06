@@ -132,10 +132,20 @@ init(Starter, Handler, Socket, ParentPid) ->
       case gen_server:call(Pid, {sys_message, {reconnect, Handler, ParentPid}, Event}) of
         ok ->
           proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket}});
-        {ok, Reply} ->
-          proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket#{reply => Reply}}});
+        {ok, {error, Error}} ->
+          proc_lib:init_ack(Starter, {error, Error});
+        {ok, _} ->
+          proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket}});
+        {ok, {error, Error}, _Message} ->
+          proc_lib:init_ack(Starter, {error, Error});
+        {ok, _, Message} ->
+          proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket#{reply => Message}}});
+        {reply, Message} ->
+          proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket#{reply => Message}}});
+        {stop, Reply} ->
+          proc_lib:init_ack(Starter, {error, Reply});
         stop ->
-          proc_lib:init_ack(Starter, {error, stop})
+          proc_lib:init_ack(Starter, {error, fail})
       end;
     {stop, Reason} ->
       proc_lib:init_ack(Starter, {error, Reason})
