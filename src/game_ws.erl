@@ -52,6 +52,8 @@ disconnect(Server) ->
 
 %% 发送阻塞消息
 -spec(call(Server :: pid(), Event :: any()) -> {error, timeout} | term()).
+call(Server, _Event) when Server == self() ->
+  {error, self_call};
 call(Server, Event) ->
   Ref = erlang:make_ref(),
   game_handler:event(Server, {call, self(), Ref, Event}),

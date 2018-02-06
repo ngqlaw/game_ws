@@ -68,6 +68,8 @@ websocket_handle(Msg, #{pid := Pid, msg_type := MsgType} = State) ->
       {stop, State}
   end.
 
+websocket_info({"send_msg", Msg}, #{msg_type := MsgType} = State) when is_binary(Msg) ->
+  {reply, {MsgType, Msg}, State};
 websocket_info("disconnect", State) ->
   {stop, State};
 websocket_info({call, ReplyPid, Ref, SysMsg}, #{pid := Pid, msg_type := MsgType} = State) ->

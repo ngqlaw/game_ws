@@ -74,6 +74,10 @@
 %%% API
 %%%===================================================================
 %% 给网络服务进程发送事件消息
+event(Server, Event) when Server == self() ->
+  Pid = get_socket(),
+  erlang:send(Pid, Event),
+  ok;
 event(Server, Event) ->
   gen_server:cast(Server, {event, Event}).
 
@@ -100,6 +104,7 @@ start_link(Handler, SocketState, ParentPid) ->
 init(Starter, Handler, Socket, ParentPid) ->
   {Init, Socket1} = maps:take(init, Socket),
   {Shutdown, NewSocket} = maps:take(shutdown, Socket1),
+  set_socket(ParentPid),
   case Handler:init(Init, self()) of
     {ok, HandleState} ->
       Ref = erlang:monitor(process, ParentPid),
@@ -125,7 +130,7 @@ init(Starter, Handler, Socket, ParentPid) ->
       case gen_server:call(Pid, {sys_message, {reconnect, Handler, ParentPid}}) of
         ok ->
           proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket}});
-        {erorr, Error} ->
+        {error, Error} ->
           proc_lib:init_ack(Starter, {error, Error})
       end;
     {already_started, Pid, Event} ->
@@ -144,6 +149,8 @@ init(Starter, Handler, Socket, ParentPid) ->
           proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket#{reply => Message}}});
         {stop, Reply} ->
           proc_lib:init_ack(Starter, {error, Reply});
+        {error, Error} ->
+          proc_lib:init_ack(Starter, {error, Error});
         stop ->
           proc_lib:init_ack(Starter, {error, fail})
       end;
@@ -209,6 +216,7 @@ handle_call({sys_message, {reconnect, Handler, ParentPid}}, _From, #state{
   receive
     {'DOWN', OldRef, process, _Object, _Reason} ->
       Ref = erlang:monitor(process, ParentPid),
+      set_socket(ParentPid),
       {reply, ok, State#state{
         monitor_ref = Ref,
         socket_pid = ParentPid
@@ -227,6 +235,7 @@ handle_call({sys_message, {reconnect, Handler, ParentPid}, Msg}, _From, #state{
   receive
     {'DOWN', OldRef, process, _Object, _Reason} ->
       Ref = erlang:monitor(process, ParentPid),
+      set_socket(ParentPid),
       handle_message(Msg, State#state{
         monitor_ref = Ref,
         socket_pid = ParentPid
@@ -401,6 +410,11 @@ handle_message(Msg, #state{handler = Handler, handler_state = HandlerState} = St
       do_stop(NewHandlerState, Reason),
       {stop, normal, stop, State#state{handler_state = NewHandlerState}}    
   end.
+
+get_socket() ->
+  erlang:get({?MODULE, local, socket_pid}).
+set_socket(Pid) ->
+  erlang:put({?MODULE, local, socket_pid}, Pid).
 
 to_binary(V) when is_list(V) -> list_to_binary(V);
 to_binary(V) when is_binary(V) -> V. 
