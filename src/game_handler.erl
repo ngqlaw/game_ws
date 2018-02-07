@@ -61,7 +61,7 @@
 -define(SERVER, ?MODULE).
 
 -record(state, {
-  monitor_ref = undefined :: reference(),
+  monitor_ref = undefined :: undefined | reference(),
   shutdown = 0 :: integer(),
   socket_pid = undefined :: undefined | pid(),
   handler = undefined :: atom(),
@@ -209,17 +209,24 @@ handle_call({net_message, {_, Msg}}, _From, State) ->
 %% 系统消息处理
 handle_call({sys_message, {reconnect, Handler, ParentPid}}, _From, #state{
     monitor_ref = OldRef,
-    handler = Handler
+    handler = Handler,
+    close_timer = CloseTimer
   } = State) ->
   %% 关闭其它连接
   game_ws:disconnect(self()),
   receive
     {'DOWN', OldRef, process, _Object, _Reason} ->
+      case is_reference(CloseTimer) of
+        true -> erlang:cancel_timer(CloseTimer);
+        false -> skip
+      end,
       Ref = erlang:monitor(process, ParentPid),
       set_socket(ParentPid),
       {reply, ok, State#state{
         monitor_ref = Ref,
-        socket_pid = ParentPid
+        socket_pid = ParentPid,
+        close_timer = undefined,
+        close_ref = undefined
       }}
   after 3000 -> 
     {reply, {error, timeout}, State}
@@ -228,17 +235,24 @@ handle_call({sys_message, {reconnect, _Handler, _ParentPid}}, _From, State) ->
   {reply, {error, fail}, State};
 handle_call({sys_message, {reconnect, Handler, ParentPid}, Msg}, _From, #state{
     monitor_ref = OldRef,
-    handler = Handler
+    handler = Handler,
+    close_timer = CloseTimer
   } = State) ->
   %% 关闭其它连接
   game_ws:disconnect(self()),
   receive
     {'DOWN', OldRef, process, _Object, _Reason} ->
+      case is_reference(CloseTimer) of
+        true -> erlang:cancel_timer(CloseTimer);
+        false -> skip
+      end,
       Ref = erlang:monitor(process, ParentPid),
       set_socket(ParentPid),
       handle_message(Msg, State#state{
         monitor_ref = Ref,
-        socket_pid = ParentPid
+        socket_pid = ParentPid,
+        close_timer = undefined,
+        close_ref = undefined
       })
   after 3000 -> 
     {reply, {error, reconnect_fail}, State}
