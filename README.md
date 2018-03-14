@@ -43,8 +43,13 @@ Usage
 -callback (pong(Payload::binary(), State) -> ack_resutl(State) when State::any()).
 -optional_callbacks([pong/2]).
 
-%% 通信结束
--callback (close(Reason::any(), State) -> ok when State::any()).
+%% 通信结束(服务器主动断开情况下，返回消息可以发送；非主动断开，返回消息会忽略)
+-callback (close(Reason::any(), State) -> 
+  {ok, State} | 
+  {reply, Message::binary()} | 
+  {reply, Message::binary(), State} | 
+  any() 
+  when State::any()).
 -optional_callbacks([close/2]).
 
 %% 服务结束

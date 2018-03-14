@@ -36,8 +36,13 @@
 -callback (pong(Payload::binary(), State) -> ack_resutl(State) when State::any()).
 -optional_callbacks([pong/2]).
 
-%% 通信结束
--callback (close(Reason::any(), State) -> {ok, State} | any() when State::any()).
+%% 通信结束(服务器主动断开情况下，返回消息可以发送；非主动断开，返回消息会忽略)
+-callback (close(Reason::any(), State) -> 
+  {ok, State} | 
+  {reply, Message::binary()} | 
+  {reply, Message::binary(), State} | 
+  any() 
+  when State::any()).
 -optional_callbacks([close/2]).
 
 %% 服务结束
@@ -67,7 +72,8 @@
   handler = undefined :: atom(),
   handler_state = #{} :: map(),
   close_timer = undefined :: any(),
-  close_ref = undefined :: undefined | reference()
+  close_ref = undefined :: undefined | reference(),
+  terminate = undefined :: undefined | delay
 }).
 
 %%%===================================================================
@@ -311,6 +317,7 @@ handle_info({'DOWN', Ref, process, _Object, Reason}, #state{
   } = State) ->
   case do_close(State, Reason) of
     {ok, NewState} -> ok;
+    {reply, _, NewState} -> ok;
     _ -> NewState = State
   end,
   case is_reference(Old) of
@@ -326,6 +333,7 @@ handle_info({'DOWN', Ref, process, _Object, Reason}, #state{
   } = State) ->
   case do_close(State, Reason) of
     {ok, NewState} -> ok;
+    {reply, _, NewState} -> ok;
     _ -> NewState = State
   end,
   case is_reference(Old) andalso (false == erlang:read_timer(Old)) of
@@ -355,8 +363,13 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec(terminate(Reason :: (normal | shutdown | {shutdown, term()} | term()),
   State :: #state{}) -> term()).
+terminate(_Reason, #state{terminate = delay} = _State) ->
+  Pid = get_socket(),
+  erlang:send_after(1000, Pid, "disconnect"),
+  ok;
 terminate(_Reason, _State) ->
-  game_ws:disconnect(self()),
+  Pid = get_socket(),
+  erlang:send(Pid, "disconnect"),
   ok.
 
 %%--------------------------------------------------------------------
@@ -376,10 +389,19 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-do_close(#state{handler = Handler, handler_state = State}, Reason) ->
+do_close(#state{handler = Handler, handler_state = HandlerState} = State, Reason) ->
   case erlang:function_exported(Handler, close, 2) of
     true ->
-      Handler:close(Reason, State);
+      case Handler:close(Reason, HandlerState) of
+        {ok, NewHandlerState} -> 
+          {ok, State#state{handler_state = NewHandlerState, terminate = undefined}};
+        {reply, ReplyMsg} -> 
+          {reply, ReplyMsg, State#state{terminate = delay}};
+        {reply, ReplyMsg, NewHandlerState} ->
+          {reply, ReplyMsg, State#state{handler_state = NewHandlerState, terminate = delay}};
+        _ -> 
+          ok
+      end;
     false ->
       ok
   end.
@@ -418,11 +440,31 @@ handle_message(Msg, #state{handler = Handler, handler_state = HandlerState} = St
     {reply, Message, NewHandlerState} ->
       {reply, {reply, Message}, State#state{handler_state = NewHandlerState}};
     {stop, Reason, Reply, NewHandlerState} ->
-      do_stop(NewHandlerState, Reason),
-      {stop, normal, {stop, Reply}, State#state{handler_state = NewHandlerState}};
+      NewState = State#state{handler_state = NewHandlerState},
+      case do_close(NewState, Reason) of
+        {ok, CloseState} -> 
+          Res = {stop, Reply};
+        {reply, SendMsg, CloseState} -> 
+          Res = {pre_stop, Reply, SendMsg};
+        _ -> 
+          CloseState = NewState,
+          Res = {stop, Reply}
+      end,
+      do_stop(CloseState, Reason),
+      {stop, normal, Res, CloseState};
     {stop, Reason, NewHandlerState} ->
-      do_stop(NewHandlerState, Reason),
-      {stop, normal, stop, State#state{handler_state = NewHandlerState}}    
+      NewState = State#state{handler_state = NewHandlerState},
+      case do_close(NewState, Reason) of
+        {ok, CloseState} -> 
+          Res = stop;
+        {reply, SendMsg, CloseState} -> 
+          Res = {pre_stop, SendMsg};
+        _ -> 
+          CloseState = NewState,
+          Res = stop
+      end,
+      do_stop(CloseState, Reason),
+      {stop, normal, Res, CloseState}
   end.
 
 get_socket() ->
