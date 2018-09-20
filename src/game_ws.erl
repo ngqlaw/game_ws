@@ -12,7 +12,7 @@
 -export([start_server/2, stop_server/1]).
 -export([
   send_msg/2, 
-  disconnect/1, 
+  disconnect/1, disconnect/2,
   call/2,
   cast/2
 ]).
@@ -33,11 +33,11 @@ start_server(Ref, Opt) ->
 %% 停止服务
 -spec(stop_server(Ref :: any()) -> ok | {error, not_found | timeout}).
 stop_server(Ref) ->
-  case cowboy:stop_listener(Ref) of
+  case game_ws_sup_sup:stop_child(Ref) of
     ok ->
-      game_ws_sup_sup:stop_child(Ref);
+      cowboy:stop_listener(Ref);
     Error ->
-      Error  
+      Error
   end.
 
 %% 发送信息
@@ -48,7 +48,9 @@ send_msg(Server, Msg) ->
 %% 关闭连接
 -spec(disconnect(Server :: pid()) -> ok).
 disconnect(Server) ->
-  game_handler:event(Server, "disconnect").
+  disconnect(Server, "").
+disconnect(Server, Msg) ->
+  game_handler:event(Server, {"disconnect", Msg}).
 
 %% 发送阻塞消息
 -spec(call(Server :: pid(), Event :: any()) -> {error, timeout} | term()).

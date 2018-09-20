@@ -62,14 +62,14 @@ websocket_handle(Msg, #{pid := Pid, msg_type := MsgType} = State) when is_pid(Pi
       {reply, {MsgType, Message}, State};
     {reply, Message} ->
       {reply, {MsgType, Message}, State};
-    {pre_stop, _Reply, Message} ->
-      {reply, {MsgType, Message}, State#{pid => undefined}};
-    {pre_stop, Message} ->
-      {reply, {MsgType, Message}, State#{pid => undefined}};
+    {stop_and_reply, _Reply, Message} ->
+      {reply, {close, 1000, Message}, State#{pid => undefined}};
+    {stop_and_reply, Message} ->
+      {reply, {close, 1000, Message}, State#{pid => undefined}};
     {stop, _Reply} ->
-      {stop, State};
+      {reply, {close, 1000, ""}, State#{pid => undefined}};
     stop ->
-      {stop, State};
+      {reply, {close, 1000, ""}, State#{pid => undefined}};
     _ ->
       {stop, State}
   end;
@@ -78,8 +78,8 @@ websocket_handle(_, State) ->
 
 websocket_info({"send_msg", Msg}, #{msg_type := MsgType} = State) when is_binary(Msg) ->
   {reply, {MsgType, Msg}, State};
-websocket_info("disconnect", State) ->
-  {stop, State};
+websocket_info({"disconnect", Msg}, State) ->
+  {reply, {close, 1000, Msg}, State};
 websocket_info({call, ReplyPid, Ref, SysMsg}, #{pid := Pid, msg_type := MsgType} = State) when is_pid(Pid) ->
   case catch game_handler:sys_message(Pid, SysMsg) of
     ok ->
@@ -94,18 +94,18 @@ websocket_info({call, ReplyPid, Ref, SysMsg}, #{pid := Pid, msg_type := MsgType}
     {reply, Message} ->
       ReplyPid ! {ok, Ref, ok},
       {reply, {MsgType, Message}, State};
-    {pre_stop, Reply, Message} ->
+    {stop_and_reply, Reply, Message} ->
       ReplyPid ! {ok, Ref, Reply},
-      {reply, {MsgType, Message}, State#{pid => undefined}};
-    {pre_stop, Message} ->
+      {reply, {close, 1000, Message}, State#{pid => undefined}};
+    {stop_and_reply, Message} ->
       ReplyPid ! {ok, Ref, process_down},
-      {reply, {MsgType, Message}, State#{pid => undefined}};
+      {reply, {close, 1000, Message}, State#{pid => undefined}};
     {stop, Reply} ->
       ReplyPid ! {ok, Ref, Reply},
-      {stop, State};
+      {reply, {close, 1000, ""}, State#{pid => undefined}};
     stop ->
       ReplyPid ! {ok, Ref, process_down},
-      {stop, State};
+      {reply, {close, 1000, ""}, State#{pid => undefined}};
     _ ->
       {stop, State}
   end;
@@ -119,14 +119,14 @@ websocket_info({cast, SysMsg}, #{pid := Pid, msg_type := MsgType} = State) when 
       {reply, {MsgType, Message}, State};
     {reply, Message} ->
       {reply, {MsgType, Message}, State};
-    {pre_stop, _Reply, Message} ->
-      {reply, {MsgType, Message}, State#{pid => undefined}};
-    {pre_stop, Message} ->
-      {reply, {MsgType, Message}, State#{pid => undefined}};
+    {stop_and_reply, _Reply, Message} ->
+      {reply, {close, 1000, Message}, State#{pid => undefined}};
+    {stop_and_reply, Message} ->
+      {reply, {close, 1000, Message}, State#{pid => undefined}};
     {stop, _Reply} ->
-      {stop, State};
+      {reply, {close, 1000, ""}, State#{pid => undefined}};
     stop ->
-      {stop, State};
+      {reply, {close, 1000, ""}, State#{pid => undefined}};
     _ ->
       {stop, State}
   end;

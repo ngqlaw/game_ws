@@ -72,8 +72,7 @@
   handler = undefined :: atom(),
   handler_state = #{} :: map(),
   close_timer = undefined :: any(),
-  close_ref = undefined :: undefined | reference(),
-  terminate = undefined :: undefined | delay
+  close_ref = undefined :: undefined | reference()
 }).
 
 %%%===================================================================
@@ -219,7 +218,14 @@ handle_call({sys_message, {reconnect, Handler, ParentPid}}, _From, #state{
     close_timer = CloseTimer
   } = State) ->
   %% 关闭其它连接
-  game_ws:disconnect(self()),
+  case do_close(State, reconnect) of
+    {ok, NewState} -> CloseMsg = "";
+    {reply, CloseMsg, NewState} -> ok;
+    _ -> 
+      NewState = State,
+      CloseMsg = ""
+  end,
+  game_ws:disconnect(self(), CloseMsg),
   receive
     {'DOWN', OldRef, process, _Object, _Reason} ->
       case is_reference(CloseTimer) of
@@ -228,14 +234,14 @@ handle_call({sys_message, {reconnect, Handler, ParentPid}}, _From, #state{
       end,
       Ref = erlang:monitor(process, ParentPid),
       set_socket(ParentPid),
-      {reply, ok, State#state{
+      {reply, ok, NewState#state{
         monitor_ref = Ref,
         socket_pid = ParentPid,
         close_timer = undefined,
         close_ref = undefined
       }}
   after 3000 -> 
-    {reply, {error, timeout}, State}
+    {reply, {error, timeout}, NewState}
   end;
 handle_call({sys_message, {reconnect, _Handler, _ParentPid}}, _From, State) ->
   {reply, {error, fail}, State};
@@ -245,7 +251,14 @@ handle_call({sys_message, {reconnect, Handler, ParentPid}, Msg}, _From, #state{
     close_timer = CloseTimer
   } = State) ->
   %% 关闭其它连接
-  game_ws:disconnect(self()),
+  case do_close(State, reconnect) of
+    {ok, NewState} -> CloseMsg = "";
+    {reply, CloseMsg, NewState} -> ok;
+    _ -> 
+      NewState = State,
+      CloseMsg = ""
+  end,
+  game_ws:disconnect(self(), CloseMsg),
   receive
     {'DOWN', OldRef, process, _Object, _Reason} ->
       case is_reference(CloseTimer) of
@@ -254,14 +267,14 @@ handle_call({sys_message, {reconnect, Handler, ParentPid}, Msg}, _From, #state{
       end,
       Ref = erlang:monitor(process, ParentPid),
       set_socket(ParentPid),
-      handle_message(Msg, State#state{
+      handle_message(Msg, NewState#state{
         monitor_ref = Ref,
         socket_pid = ParentPid,
         close_timer = undefined,
         close_ref = undefined
       })
   after 3000 -> 
-    {reply, {error, reconnect_fail}, State}
+    {reply, {error, reconnect_fail}, NewState}
   end;
 handle_call({sys_message, {reconnect, _Handler, _ParentPid}, _Msg}, _From, State) ->
   {reply, {error, fail}, State};
@@ -363,13 +376,8 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec(terminate(Reason :: (normal | shutdown | {shutdown, term()} | term()),
   State :: #state{}) -> term()).
-terminate(_Reason, #state{terminate = delay} = _State) ->
-  Pid = get_socket(),
-  erlang:send_after(1000, Pid, "disconnect"),
-  ok;
 terminate(_Reason, _State) ->
-  Pid = get_socket(),
-  erlang:send(Pid, "disconnect"),
+  game_ws:disconnect(self()),
   ok.
 
 %%--------------------------------------------------------------------
@@ -394,11 +402,11 @@ do_close(#state{handler = Handler, handler_state = HandlerState} = State, Reason
     true ->
       case Handler:close(Reason, HandlerState) of
         {ok, NewHandlerState} -> 
-          {ok, State#state{handler_state = NewHandlerState, terminate = undefined}};
+          {ok, State#state{handler_state = NewHandlerState}};
         {reply, ReplyMsg} -> 
-          {reply, ReplyMsg, State#state{terminate = delay}};
+          {reply, ReplyMsg, State};
         {reply, ReplyMsg, NewHandlerState} ->
-          {reply, ReplyMsg, State#state{handler_state = NewHandlerState, terminate = delay}};
+          {reply, ReplyMsg, State#state{handler_state = NewHandlerState}};
         _ -> 
           ok
       end;
@@ -445,7 +453,7 @@ handle_message(Msg, #state{handler = Handler, handler_state = HandlerState} = St
         {ok, CloseState} -> 
           Res = {stop, Reply};
         {reply, SendMsg, CloseState} -> 
-          Res = {pre_stop, Reply, SendMsg};
+          Res = {stop_and_reply, Reply, SendMsg};
         _ -> 
           CloseState = NewState,
           Res = {stop, Reply}
@@ -458,7 +466,7 @@ handle_message(Msg, #state{handler = Handler, handler_state = HandlerState} = St
         {ok, CloseState} -> 
           Res = stop;
         {reply, SendMsg, CloseState} -> 
-          Res = {pre_stop, SendMsg};
+          Res = {stop_and_reply, SendMsg};
         _ -> 
           CloseState = NewState,
           Res = stop
