@@ -40,6 +40,8 @@ websocket_init(State) ->
       do_reply(NewState, HandlePid);
     {error, {already_started, HandlePid, NewState}} ->
       do_reply(NewState, HandlePid);
+    {error, {reply, Message}} ->
+      {reply, {close, 1000, Message}, State};
     _ ->
       {stop, State}
   end.

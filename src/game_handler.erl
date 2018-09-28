@@ -71,8 +71,7 @@
   socket_pid = undefined :: undefined | pid(),
   handler = undefined :: atom(),
   handler_state = #{} :: map(),
-  close_timer = undefined :: any(),
-  close_ref = undefined :: undefined | reference()
+  close_timer = undefined :: undefined | reference()
 }).
 
 %%%===================================================================
@@ -152,6 +151,8 @@ init(Starter, Handler, Socket, ParentPid) ->
           proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket#{reply => Message}}});
         {reply, Message} ->
           proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket#{reply => Message}}});
+        {stop_and_reply, _Reply, Message} ->
+          proc_lib:init_ack(Starter, {error, {reply, Message}});
         {stop, Reply} ->
           proc_lib:init_ack(Starter, {error, Reply});
         {error, Error} ->
@@ -237,10 +238,9 @@ handle_call({sys_message, {reconnect, Handler, ParentPid}}, _From, #state{
       {reply, ok, NewState#state{
         monitor_ref = Ref,
         socket_pid = ParentPid,
-        close_timer = undefined,
-        close_ref = undefined
+        close_timer = undefined
       }}
-  after 3000 -> 
+  after 3000 ->
     {reply, {error, timeout}, NewState}
   end;
 handle_call({sys_message, {reconnect, _Handler, _ParentPid}}, _From, State) ->
@@ -270,8 +270,7 @@ handle_call({sys_message, {reconnect, Handler, ParentPid}, Msg}, _From, #state{
       handle_message(Msg, NewState#state{
         monitor_ref = Ref,
         socket_pid = ParentPid,
-        close_timer = undefined,
-        close_ref = undefined
+        close_timer = undefined
       })
   after 3000 -> 
     {reply, {error, reconnect_fail}, NewState}
@@ -338,7 +337,7 @@ handle_info({'DOWN', Ref, process, _Object, Reason}, #state{
     false -> skip
   end,
   do_stop(NewState, Reason),
-  {stop, normal, ok, NewState};
+  {stop, normal, ok, NewState#state{close_timer = undefined}};
 handle_info({'DOWN', Ref, process, _Object, Reason}, #state{
     monitor_ref = Ref,
     shutdown = Shutdown, 
@@ -349,17 +348,16 @@ handle_info({'DOWN', Ref, process, _Object, Reason}, #state{
     {reply, _, NewState} -> ok;
     _ -> NewState = State
   end,
-  case is_reference(Old) andalso (false == erlang:read_timer(Old)) of
+  case is_reference(Old) andalso (false =/= erlang:read_timer(Old)) of
     true -> 
       {noreply, NewState};
-    false -> 
-      CloseRef = erlang:make_ref(),
-      CloseTimer = erlang:send_after(Shutdown, self(), {stop, CloseRef, Reason}),
-      {noreply, NewState#state{close_timer = CloseTimer, close_ref = CloseRef}}
+    false ->
+      CloseTimer = erlang:start_timer(Shutdown, self(), {stop, Reason}),
+      {noreply, NewState#state{close_timer = CloseTimer}}
   end;
-handle_info({stop, CloseRef, Reason}, #state{close_ref = CloseRef} = State) ->
+handle_info({timeout, TimerRef, {stop, Reason}}, #state{close_timer = TimerRef} = State) ->
   do_stop(State, Reason),
-  {stop, normal, State};
+  {stop, normal, State#state{close_timer = undefined}};
 handle_info(_Info, State) ->
   {noreply, State}.
 
