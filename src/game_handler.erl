@@ -11,42 +11,49 @@
 
 -behaviour(gen_server).
 
--type (handle_result(State) :: {ok, Reply::term(), Message::binary(), State}
-| {ok, Reply::term(), State}
-| {ok, State}
-| {reply, Message::binary(), State}
-| {stop, Reason::term(), Reply::term(), State}
+-type(handle_result(State) :: {ok, State}
+| {reply, Message::any(), State}
 | {stop, Reason::term(), State}).
 
--type (ack_resutl(State) :: {ok, State} | {reply, Message::binary(), State} | any()).
+-type(handle_reply_result(State) :: {ok, Reply::term(), State}
+| {reply, Reply::term(), Message::any(), State}
+| {stop, Reason::term(), Reply::term(), State}).
+
+-type(ack_resutl(State) :: {ok, State} | {reply, Message::binary(), State} | any()).
 
 %% 初始化进程内存
--callback (init(Req::map(), pid()) -> {ok, State::any()} | {reply, Reply::binary(), State::any()}
+-callback(init(Req::map(), pid()) -> {ok, State::any()} | {reply, Reply::binary(), State::any()}
 | {already_started, Handler::pid()} | {already_started, Handler::pid(), Event::term()}
 | {stop, Error::term()}).
 
+%% 重连
+-callback(reconnect(State::any()) -> {ok, State::any()} | {reply, Reply::binary(), State::any()}
+| {stop, Error::term()}).
+
 %% 消息处理
--callback (handle({tcp, binary()} | term(), State) -> handle_result(State) when State::any()).
+-callback(handle_tcp(term(), State) -> handle_result(State) when State::any()).
+-callback(handle_cast(term(), State) -> handle_result(State) when State::any()).
+-callback(handle_call(term(), State) -> handle_reply_result(State) when State::any()).
 
 %% ping(消息已回复)
--callback (ping(Payload::binary(), State) -> ack_resutl(State) when State::any()).
+-callback(ping(Payload::binary(), State) -> ack_resutl(State) when State::any()).
 -optional_callbacks([ping/2]).
 
 %% pong(消息已回复)
--callback (pong(Payload::binary(), State) -> ack_resutl(State) when State::any()).
+-callback(pong(Payload::binary(), State) -> ack_resutl(State) when State::any()).
 -optional_callbacks([pong/2]).
 
 %% 通信结束(服务器主动断开情况下，返回消息可以发送；非主动断开，返回消息会忽略)
--callback (close(Reason::any(), State) -> 
-  {ok, State} | 
-  {reply, Message::binary()} | 
-  {reply, Message::binary(), State} | 
-  any() 
-  when State::any()).
+-callback(close(Reason::any(), State) -> 
+    {ok, State} | 
+    {reply, Message::binary()} | 
+    {reply, Message::binary(), State} | 
+    any() 
+    when State::any()).
 -optional_callbacks([close/2]).
 
 %% 服务结束
--callback (terminate(Reason::any(), State) -> any() when State::any()).
+-callback(terminate(Reason::any(), State) -> any() when State::any()).
 -optional_callbacks([terminate/2]).
 
 %% API
@@ -55,43 +62,44 @@
 
 %% gen_server callbacks
 -export([
-  init/1,
-  handle_call/3,
-  handle_cast/2,
-  handle_info/2,
-  terminate/2,
-  code_change/3
+    init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    terminate/2,
+    code_change/3
 ]).
+
+-compile({inline, [send_msg/2, disconnect/2]}).
 
 -define(SERVER, ?MODULE).
 
 -record(state, {
-  monitor_ref = undefined :: undefined | reference(),
-  shutdown = 0 :: integer(),
-  socket_pid = undefined :: undefined | pid(),
-  handler = undefined :: atom(),
-  handler_state = #{} :: map(),
-  close_timer = undefined :: undefined | reference()
+    monitor_ref = undefined :: undefined | reference(),
+    shutdown = 0 :: integer(),
+    socket_pid = undefined :: undefined | pid(),
+    handler = undefined :: atom(),
+    handler_state = #{} :: map(),
+    close = false :: false | term(),
+    close_timer = undefined :: undefined | reference()
 }).
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 %% 给网络服务进程发送事件消息
-event(Server, Event) when Server == self() ->
-  Pid = get_socket(),
-  erlang:send(Pid, Event),
-  ok;
 event(Server, Event) ->
-  gen_server:cast(Server, {event, Event}).
+    gen_server:cast(Server, {event, Event}).
 
 %% 处理通信事件消息
 net_message(Server, Msg) ->  
-  gen_server:call(Server, {net_message, Msg}).
+    gen_server:cast(Server, {net_message, Msg}).
 
 %% 自定义消息
-sys_message(Server, Msg) ->  
-  gen_server:call(Server, {sys_message, Msg}).    
+sys_message(Server, {cast, Msg}) ->  
+    gen_server:cast(Server, {sys_message, Msg});
+sys_message(Server, {call, Msg}) ->
+    gen_server:call(Server, {sys_message, Msg}).
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -100,69 +108,47 @@ sys_message(Server, Msg) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(start_link(atom(), any(), pid()) ->
-  {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
+    {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
 start_link(Handler, SocketState, ParentPid) ->
-  proc_lib:start_link(?MODULE, init, [self(), Handler, SocketState, ParentPid]).
+    proc_lib:start_link(?MODULE, init, [self(), Handler, SocketState, ParentPid]).
 
 -spec(init(Starter :: pid(), Handler :: atom(), Socket :: map(), ParentPid :: pid()) -> no_return()).
 init(Starter, Handler, Socket, ParentPid) ->
-  {Init, Socket1} = maps:take(init, Socket),
-  {Shutdown, NewSocket} = maps:take(shutdown, Socket1),
-  set_socket(ParentPid),
-  case Handler:init(Init, self()) of
+    {Init, Socket1} = maps:take(init, Socket),
+    {Shutdown, NewSocket} = maps:take(shutdown, Socket1),
+    case Handler:init(Init, self()) of
     {ok, HandleState} ->
-      Ref = erlang:monitor(process, ParentPid),
-      proc_lib:init_ack(Starter, {ok, self(), NewSocket}),
-      gen_server:enter_loop(?MODULE, [], #state{
-        monitor_ref = Ref,
-        shutdown = Shutdown,
-        socket_pid = ParentPid,
-        handler = Handler,
-        handler_state = HandleState
-      });
+        Ref = erlang:monitor(process, ParentPid),
+        proc_lib:init_ack(Starter, {ok, self(), NewSocket}),
+        gen_server:enter_loop(?MODULE, [], #state{
+            monitor_ref = Ref,
+            shutdown = Shutdown,
+            socket_pid = ParentPid,
+            handler = Handler,
+            handler_state = HandleState
+        });
     {reply, Reply, HandleState} ->
-      Ref = erlang:monitor(process, ParentPid),
-      proc_lib:init_ack(Starter, {ok, self(), NewSocket#{reply => Reply}}),
-      gen_server:enter_loop(?MODULE, [], #state{
-        monitor_ref = Ref,
-        shutdown = Shutdown,
-        socket_pid = ParentPid,
-        handler = Handler,
-        handler_state = HandleState
-      });
+        Ref = erlang:monitor(process, ParentPid),
+        proc_lib:init_ack(Starter, {ok, self(), NewSocket#{reply => Reply}}),
+        gen_server:enter_loop(?MODULE, [], #state{
+            monitor_ref = Ref,
+            shutdown = Shutdown,
+            socket_pid = ParentPid,
+            handler = Handler,
+            handler_state = HandleState
+        });
     {already_started, Pid} ->
-      case gen_server:call(Pid, {sys_message, {reconnect, Handler, ParentPid}}) of
-        ok ->
-          proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket}});
-        {error, Error} ->
-          proc_lib:init_ack(Starter, {error, Error})
-      end;
-    {already_started, Pid, Event} ->
-      case gen_server:call(Pid, {sys_message, {reconnect, Handler, ParentPid}, Event}) of
-        ok ->
-          proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket}});
-        {ok, {error, Error}} ->
-          proc_lib:init_ack(Starter, {error, Error});
-        {ok, _} ->
-          proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket}});
-        {ok, {error, Error}, _Message} ->
-          proc_lib:init_ack(Starter, {error, Error});
-        {ok, _, Message} ->
-          proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket#{reply => Message}}});
-        {reply, Message} ->
-          proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket#{reply => Message}}});
-        {stop_and_reply, _Reply, Message} ->
-          proc_lib:init_ack(Starter, {error, {reply, Message}});
-        {stop, Reply} ->
-          proc_lib:init_ack(Starter, {error, Reply});
-        {error, Error} ->
-          proc_lib:init_ack(Starter, {error, Error});
-        stop ->
-          proc_lib:init_ack(Starter, {error, fail})
-      end;
+        case gen_server:call(Pid, {sys_message, {reconnect, Handler, ParentPid}}) of
+            ok ->
+                proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket}});
+            {reply, Reply} ->
+                proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket#{reply => Reply}}});
+            {error, Error} ->
+                proc_lib:init_ack(Starter, {error, Error})
+        end;
     {stop, Reason} ->
-      proc_lib:init_ack(Starter, {error, Reason})
-  end.
+        proc_lib:init_ack(Starter, {error, Reason})
+    end.
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -180,10 +166,10 @@ init(Starter, Handler, Socket, ParentPid) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(init(Args :: term()) ->
-  {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
-  {stop, Reason :: term()} | ignore).
+    {ok, State :: #state{}} | {ok, State :: #state{}, timeout() | hibernate} |
+    {stop, Reason :: term()} | ignore).
 init(_) ->
-  {ok, #state{}}.
+    {ok, #state{}}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -193,103 +179,94 @@ init(_) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(handle_call(Request :: term(), From :: {pid(), Tag :: term()},
-  State :: #state{}) ->
-  {reply, Reply :: term(), NewState :: #state{}} |
-  {reply, Reply :: term(), NewState :: #state{}, timeout() | hibernate} |
-  {noreply, NewState :: #state{}} |
-  {noreply, NewState :: #state{}, timeout() | hibernate} |
-  {stop, Reason :: term(), Reply :: term(), NewState :: #state{}} |
-  {stop, Reason :: term(), NewState :: #state{}}).
-%% 网络信息通信处理
-handle_call({net_message, ping}, _From, State) ->
-  ack(ping, <<>>, State);
-handle_call({net_message, {ping, Msg}}, _From, State) ->
-  ack(ping, Msg, State);
-handle_call({net_message, pong}, _From, State) ->
-  ack(pong, <<>>, State);
-handle_call({net_message, {pong, Msg}}, _From, State) ->
-  ack(pong, Msg, State);
-handle_call({net_message, {_, Msg}}, _From, State) ->
-  handle_message({tcp, to_binary(Msg)}, State);
-
+    State :: #state{}) ->
+    {reply, Reply :: term(), NewState :: #state{}} |
+    {reply, Reply :: term(), NewState :: #state{}, timeout() | hibernate} |
+    {noreply, NewState :: #state{}} |
+    {noreply, NewState :: #state{}, timeout() | hibernate} |
+    {stop, Reason :: term(), Reply :: term(), NewState :: #state{}} |
+    {stop, Reason :: term(), NewState :: #state{}}).
 %% 系统消息处理
 handle_call({sys_message, {reconnect, Handler, ParentPid}}, _From, #state{
     monitor_ref = OldRef,
+    socket_pid = SocketPid,
     handler = Handler,
     close_timer = CloseTimer
-  } = State) ->
-  %% 关闭其它连接
-  case do_close(State, reconnect) of
-    {ok, NewState} -> CloseMsg = "";
-    {reply, CloseMsg, NewState} -> ok;
-    _ -> 
-      NewState = State,
-      CloseMsg = ""
-  end,
-  game_ws:disconnect(self(), CloseMsg),
-  receive
-    {'DOWN', OldRef, process, _Object, _Reason} ->
-      case is_reference(CloseTimer) of
-        true -> erlang:cancel_timer(CloseTimer);
-        false -> skip
-      end,
-      Ref = erlang:monitor(process, ParentPid),
-      set_socket(ParentPid),
-      {reply, ok, NewState#state{
-        monitor_ref = Ref,
-        socket_pid = ParentPid,
-        close_timer = undefined
-      }}
-  after 3000 ->
-    {reply, {error, timeout}, NewState}
-  end;
+} = State) ->
+    %% 关闭其它连接
+    case do_close(State#state{close = reconnect}) of
+        {ok, TempState} ->
+            CloseMsg = "";
+        {reply, CloseMsg, TempState} ->
+            ok
+    end,
+    disconnect(SocketPid, CloseMsg),
+    %% 等待socket进程关闭消息
+    receive
+        {'DOWN', OldRef, process, _Object, _Reason} ->
+            case is_reference(CloseTimer) of
+                true -> erlang:cancel_timer(CloseTimer);
+                false -> skip
+            end,
+            Ref = erlang:monitor(process, ParentPid),
+            NewState = TempState#state{
+                monitor_ref = Ref,
+                socket_pid = ParentPid,
+                close_timer = undefined
+            },
+            %% 重连初始化，成功重连后需要将关闭标志位置false
+            case Handler:reconnect(NewState#state.handler_state) of
+                {ok, HandleState} ->
+                    {reply, ok, NewState#state{handler_state = HandleState, close = false}};
+                {reply, Reply, HandleState} ->
+                    {reply, {reply, Reply}, NewState#state{handler_state = HandleState, close = false}};
+                {stop, Reason} ->
+                    {reply, {error, Reason}, NewState}
+            end
+    after 3000 ->
+        %% 超时没收到socket进程关闭消息，可能已经关闭，但是一样当成失败处理
+        {reply, {error, timeout}, TempState}
+    end;
 handle_call({sys_message, {reconnect, _Handler, _ParentPid}}, _From, State) ->
-  {reply, {error, fail}, State};
-handle_call({sys_message, {reconnect, Handler, ParentPid}, Msg}, _From, #state{
-    monitor_ref = OldRef,
+    %% 处理模块名与初始化模块名不一致
+    {reply, {error, fail}, State};
+handle_call({sys_message, Msg}, _From, #state{
+    socket_pid = SocketPid,
     handler = Handler,
-    close_timer = CloseTimer
-  } = State) ->
-  %% 关闭其它连接
-  case do_close(State, reconnect) of
-    {ok, NewState} -> CloseMsg = "";
-    {reply, CloseMsg, NewState} -> ok;
-    _ -> 
-      NewState = State,
-      CloseMsg = ""
-  end,
-  game_ws:disconnect(self(), CloseMsg),
-  receive
-    {'DOWN', OldRef, process, _Object, _Reason} ->
-      case is_reference(CloseTimer) of
-        true -> erlang:cancel_timer(CloseTimer);
-        false -> skip
-      end,
-      Ref = erlang:monitor(process, ParentPid),
-      set_socket(ParentPid),
-      handle_message(Msg, NewState#state{
-        monitor_ref = Ref,
-        socket_pid = ParentPid,
-        close_timer = undefined
-      })
-  after 3000 -> 
-    {reply, {error, reconnect_fail}, NewState}
-  end;
-handle_call({sys_message, {reconnect, _Handler, _ParentPid}, _Msg}, _From, State) ->
-  {reply, {error, fail}, State};
-handle_call({sys_message, Msg}, _From, State) ->
-  handle_message(Msg, State);
+    handler_state = HandlerState
+} = State) ->
+    case Handler:handle_call(Msg, HandlerState) of
+        {ok, Reply, NewHandlerState} ->
+            {reply, Reply, State#state{handler_state = NewHandlerState}};
+        {reply, Message, Reply, NewHandlerState} ->
+            send_msg(SocketPid, Message),
+            {reply, Reply, State#state{handler_state = NewHandlerState}};
+        {stop, Reason, Reply, NewHandlerState} ->
+            NewState = State#state{handler_state = NewHandlerState, close = Reason},
+            case do_close(NewState) of
+                {ok, CloseState} ->
+                    ok;
+                {reply, SendMsg, CloseState} ->
+                    send_msg(SocketPid, SendMsg)
+            end,
+            {stop, normal, Reply, CloseState}
+    end;
 
 %% 强制关闭进程
-handle_call({soft_stop_immediately, SupPid}, From, State) ->
-  gen_server:reply(From, ok),
-  do_stop(State, shutdown),
-  SupPid ! ok,
-  {stop, normal, State};
+handle_call({soft_stop_immediately, SupPid}, From, #state{socket_pid = SocketPid} = State) ->
+    gen_server:reply(From, ok),
+    case do_close(State#state{close = {shutdown, SupPid}}) of
+        {ok, NewState} ->
+            CloseMsg = "";
+        {reply, CloseMsg, NewState} ->
+            ok
+    end,
+    disconnect(SocketPid, CloseMsg),
+    {stop, normal, NewState};
 
 handle_call(_Request, _From, State) ->
-  %% !!!应该不会执行
-  {reply, ok, State}.
+    %% !!!应该不会执行
+    {reply, ok, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -299,14 +276,66 @@ handle_call(_Request, _From, State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(handle_cast(Request :: term(), State :: #state{}) ->
-  {noreply, NewState :: #state{}} |
-  {noreply, NewState :: #state{}, timeout() | hibernate} |
-  {stop, Reason :: term(), NewState :: #state{}}).
-handle_cast({event, Msg}, #state{socket_pid = Pid} = State) ->
-  erlang:send(Pid, Msg),
-  {noreply, State};
+    {noreply, NewState :: #state{}} |
+    {noreply, NewState :: #state{}, timeout() | hibernate} |
+    {stop, Reason :: term(), NewState :: #state{}}).
+%% 网络信息通信处理
+handle_cast({net_message, {ping, Msg}}, State) ->
+    ack(ping, Msg, State);
+handle_cast({net_message, {pong, Msg}}, State) ->
+    ack(pong, Msg, State);
+handle_cast({net_message, {tcp, Msg}}, #state{
+    socket_pid = SocketPid,
+    handler = Handler,
+    handler_state = HandlerState
+} = State) ->
+    case Handler:handle_tcp(Msg, HandlerState) of
+        {ok, NewHandlerState} ->
+            {noreply, State#state{handler_state = NewHandlerState}};
+        {reply, Message, NewHandlerState} ->
+            send_msg(SocketPid, Message),
+            {noreply, State#state{handler_state = NewHandlerState}};
+        {stop, Reason, NewHandlerState} ->
+            NewState = State#state{handler_state = NewHandlerState, close = Reason},
+            case do_close(NewState) of
+                {ok, CloseState} ->
+                    ok;
+                {reply, SendMsg, CloseState} ->
+                    send_msg(SocketPid, SendMsg)
+            end,
+            {stop, normal, CloseState}
+    end;
+%% 转发网络进程消息
+handle_cast({event, _Msg}, #state{socket_pid = undefined} = State) ->
+    %% socket进程已经关闭
+    {noreply, State};
+handle_cast({event, Msg}, #state{socket_pid = SocketPid} = State) ->
+    erlang:send(SocketPid, Msg),
+    {noreply, State};
+%% 系统消息
+handle_cast({sys_message, Msg}, #state{
+    socket_pid = SocketPid,
+    handler = Handler,
+    handler_state = HandlerState
+} = State) ->
+    case Handler:handle_cast(Msg, HandlerState) of
+        {ok, NewHandlerState} ->
+            {noreply, State#state{handler_state = NewHandlerState}};
+        {reply, Message, NewHandlerState} ->
+            send_msg(SocketPid, Message),
+            {noreply, State#state{handler_state = NewHandlerState}};
+        {stop, Reason, NewHandlerState} ->
+            NewState = State#state{handler_state = NewHandlerState, close = Reason},
+            case do_close(NewState) of
+                {ok, CloseState} ->
+                    ok;
+                {reply, SendMsg, CloseState} ->
+                    send_msg(SocketPid, SendMsg)
+            end,
+            {stop, normal, CloseState}
+    end;
 handle_cast(_Request, State) ->
-  {noreply, State}.
+    {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -319,47 +348,45 @@ handle_cast(_Request, State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(handle_info(Info :: timeout() | term(), State :: #state{}) ->
-  {noreply, NewState :: #state{}} |
-  {noreply, NewState :: #state{}, timeout() | hibernate} |
-  {stop, Reason :: term(), NewState :: #state{}}).
+    {noreply, NewState :: #state{}} |
+    {noreply, NewState :: #state{}, timeout() | hibernate} |
+    {stop, Reason :: term(), NewState :: #state{}}).
 handle_info({'DOWN', Ref, process, _Object, Reason}, #state{
     monitor_ref = Ref,
     shutdown = 0, 
     close_timer = Old
-  } = State) ->
-  case do_close(State, Reason) of
-    {ok, NewState} -> ok;
-    {reply, _, NewState} -> ok;
-    _ -> NewState = State
-  end,
-  case is_reference(Old) of
-    true -> erlang:cancel_timer(Old);
-    false -> skip
-  end,
-  do_stop(NewState, Reason),
-  {stop, normal, ok, NewState#state{close_timer = undefined}};
+} = State) ->
+    %% 通信进程主动关闭，关闭消息不用返回
+    case do_close(State#state{close = Reason}) of
+        {ok, NewState} -> ok;
+        {reply, _, NewState} -> ok
+    end,
+    case is_reference(Old) of
+        true -> erlang:cancel_timer(Old);
+        false -> skip
+    end,
+    {stop, normal, ok, NewState#state{close_timer = undefined}};
 handle_info({'DOWN', Ref, process, _Object, Reason}, #state{
     monitor_ref = Ref,
     shutdown = Shutdown, 
     close_timer = Old
-  } = State) ->
-  case do_close(State, Reason) of
-    {ok, NewState} -> ok;
-    {reply, _, NewState} -> ok;
-    _ -> NewState = State
-  end,
-  case is_reference(Old) andalso (false =/= erlang:read_timer(Old)) of
-    true -> 
-      {noreply, NewState};
-    false ->
-      CloseTimer = erlang:start_timer(Shutdown, self(), {stop, Reason}),
-      {noreply, NewState#state{close_timer = CloseTimer}}
-  end;
-handle_info({timeout, TimerRef, {stop, Reason}}, #state{close_timer = TimerRef} = State) ->
-  do_stop(State, Reason),
-  {stop, normal, State#state{close_timer = undefined}};
+} = State) ->
+    %% 通信进程主动关闭，关闭消息不用返回
+    case do_close(State#state{close = Reason}) of
+        {ok, NewState} -> ok;
+        {reply, _, NewState} -> ok
+    end,
+    case is_reference(Old) andalso (false =/= erlang:read_timer(Old)) of
+        true -> 
+            {noreply, NewState};
+        false ->
+            CloseTimer = erlang:start_timer(Shutdown, self(), stop),
+            {noreply, NewState#state{close_timer = CloseTimer}}
+    end;
+handle_info({timeout, TimerRef, stop}, #state{close_timer = TimerRef} = State) ->
+    {stop, normal, State#state{close_timer = undefined}};
 handle_info(_Info, State) ->
-  {noreply, State}.
+    {noreply, State}.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -373,10 +400,31 @@ handle_info(_Info, State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(terminate(Reason :: (normal | shutdown | {shutdown, term()} | term()),
-  State :: #state{}) -> term()).
-terminate(_Reason, _State) ->
-  game_ws:disconnect(self()),
-  ok.
+    State :: #state{}) -> term()).
+terminate(_Reason, #state{
+    socket_pid = SocketPid,
+    handler = Handler,
+    handler_state = State,
+    close = Reason
+} = State) ->
+    %% 保证通信进程断开
+    disconnect(SocketPid, ""),
+    %% 先发送断线消息，再处理进程内容
+    Res =
+        case erlang:function_exported(Handler, terminate, 2) of
+            true ->
+                Handler:terminate(Reason, State);
+            false ->
+                ok
+        end,
+    case Reason of
+        {shutdown, Pid} ->
+            %% 强制关闭需要回复消息
+            Pid ! ok,
+            Res;
+        _ -> Res
+    end,
+    ok.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -387,96 +435,49 @@ terminate(_Reason, _State) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(code_change(OldVsn :: term() | {down, term()}, State :: #state{},
-  Extra :: term()) ->
-  {ok, NewState :: #state{}} | {error, Reason :: term()}).
+    Extra :: term()) ->
+    {ok, NewState :: #state{}} | {error, Reason :: term()}).
 code_change(_OldVsn, State, _Extra) ->
-  {ok, State}.
+    {ok, State}.
 
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-do_close(#state{handler = Handler, handler_state = HandlerState} = State, Reason) ->
-  case erlang:function_exported(Handler, close, 2) of
-    true ->
-      case Handler:close(Reason, HandlerState) of
-        {ok, NewHandlerState} -> 
-          {ok, State#state{handler_state = NewHandlerState}};
-        {reply, ReplyMsg} -> 
-          {reply, ReplyMsg, State};
-        {reply, ReplyMsg, NewHandlerState} ->
-          {reply, ReplyMsg, State#state{handler_state = NewHandlerState}};
-        _ -> 
-          ok
-      end;
-    false ->
-      ok
-  end.
-
-do_stop(#state{handler = Handler, handler_state = State}, Reason) ->
-  case erlang:function_exported(Handler, terminate, 2) of
-    true ->
-      Handler:terminate(Reason, State);
-    false ->
-      ok
-  end.
+do_close(#state{handler = Handler, handler_state = HandlerState, close = Reason} = State) ->
+    case erlang:function_exported(Handler, close, 2) of
+        true ->
+            case Handler:close(Reason, HandlerState) of
+                {ok, NewHandlerState} ->
+                    {ok, State#state{handler_state = NewHandlerState}};
+                {reply, ReplyMsg} ->
+                    {reply, ReplyMsg, State};
+                {reply, ReplyMsg, NewHandlerState} ->
+                    {reply, ReplyMsg, State#state{handler_state = NewHandlerState}};
+                _ ->
+                    {ok, State}
+            end;
+        false ->
+            {ok, State}
+    end.
 
 ack(Fun, Msg, #state{handler = Handler, handler_state = HandlerState} = State) ->
-  case erlang:function_exported(Handler, Fun, 2) of
-    true ->
-      case Handler:Fun(to_binary(Msg), HandlerState) of
-        {ok, NewHandlerState} ->
-          {reply, ok, State#state{handler_state = NewHandlerState}};
-        {reply, Reply, NewHandlerState} ->
-          {reply, {reply, Reply}, State#state{handler_state = NewHandlerState}};
-        _ ->
-          {reply, ok, State}
-      end;
-    false ->
-      {reply, ok, State}
-  end.
+    case erlang:function_exported(Handler, Fun, 2) of
+        true ->
+            case Handler:Fun(Msg, HandlerState) of
+                {ok, NewHandlerState} ->
+                    {reply, ok, State#state{handler_state = NewHandlerState}};
+                {reply, Message, NewHandlerState} ->
+                    ReplyMsg = Handler:serialize(Message),
+                    {reply, {reply, ReplyMsg}, State#state{handler_state = NewHandlerState}};
+                _ ->
+                    {reply, ok, State}
+            end;
+        false ->
+            {reply, ok, State}
+    end.
 
-handle_message(Msg, #state{handler = Handler, handler_state = HandlerState} = State) ->
-  case Handler:handle(Msg, HandlerState) of
-    {ok, NewHandlerState} ->
-      {reply, ok, State#state{handler_state = NewHandlerState}};
-    {ok, Reply, NewHandlerState} ->
-      {reply, {ok, Reply}, State#state{handler_state = NewHandlerState}};
-    {ok, Reply, Message, NewHandlerState} ->
-      {reply, {ok, Reply, Message}, State#state{handler_state = NewHandlerState}};
-    {reply, Message, NewHandlerState} ->
-      {reply, {reply, Message}, State#state{handler_state = NewHandlerState}};
-    {stop, Reason, Reply, NewHandlerState} ->
-      NewState = State#state{handler_state = NewHandlerState},
-      case do_close(NewState, Reason) of
-        {ok, CloseState} -> 
-          Res = {stop, Reply};
-        {reply, SendMsg, CloseState} -> 
-          Res = {stop_and_reply, Reply, SendMsg};
-        _ -> 
-          CloseState = NewState,
-          Res = {stop, Reply}
-      end,
-      do_stop(CloseState, Reason),
-      {stop, normal, Res, CloseState};
-    {stop, Reason, NewHandlerState} ->
-      NewState = State#state{handler_state = NewHandlerState},
-      case do_close(NewState, Reason) of
-        {ok, CloseState} -> 
-          Res = stop;
-        {reply, SendMsg, CloseState} -> 
-          Res = {stop_and_reply, SendMsg};
-        _ -> 
-          CloseState = NewState,
-          Res = stop
-      end,
-      do_stop(CloseState, Reason),
-      {stop, normal, Res, CloseState}
-  end.
+send_msg(SocketPid, Message) ->
+    erlang:send(SocketPid, {"send_msg", Message}).
 
-get_socket() ->
-  erlang:get({?MODULE, local, socket_pid}).
-set_socket(Pid) ->
-  erlang:put({?MODULE, local, socket_pid}, Pid).
-
-to_binary(V) when is_list(V) -> list_to_binary(V);
-to_binary(V) when is_binary(V) -> V. 
+disconnect(SocketPid, Message) ->
+    erlang:send(SocketPid, {"disconnect", Message}).

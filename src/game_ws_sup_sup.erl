@@ -23,22 +23,22 @@
 %%% API functions
 %%%===================================================================
 start_child(Child) ->
-  supervisor:start_child(?SERVER, Child).
+    supervisor:start_child(?SERVER, Child).
 
 stop_child(Ref) ->
-  Children = supervisor:which_children(?SERVER),
-  case lists:keyfind(Ref, 1, Children) of
-    {_, Pid, _, _} ->
-      case game_ws_sup:stop(Pid) of
-        ok ->
-          supervisor:terminate_child(?SERVER, Ref),
-          supervisor:delete_child(?SERVER, Ref);
-        Error ->
-          Error
-      end;      
-    _ ->
-      {error, not_found}  
-  end.
+    Children = supervisor:which_children(?SERVER),
+    case lists:keyfind(Ref, 1, Children) of
+        {_, Pid, _, _} ->
+            case game_ws_sup:stop(Pid) of
+                ok ->
+                    supervisor:terminate_child(?SERVER, Ref),
+                    supervisor:delete_child(?SERVER, Ref);
+                Error ->
+                    Error
+            end;      
+        _ ->
+            {error, not_found}  
+    end.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -46,10 +46,9 @@ stop_child(Ref) ->
 %%
 %% @end
 %%--------------------------------------------------------------------
--spec(start_link() ->
-  {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
+-spec(start_link() -> {ok, Pid :: pid()} | ignore | {error, Reason :: term()}).
 start_link() ->
-  supervisor:start_link({local, ?SERVER}, ?MODULE, []).
+    supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
 %%%===================================================================
 %%% Supervisor callbacks
@@ -66,14 +65,14 @@ start_link() ->
 %% @end
 %%--------------------------------------------------------------------
 -spec(init(Args :: term()) ->
-  {ok, {SupFlags :: {RestartStrategy :: supervisor:strategy(),
-    MaxR :: non_neg_integer(), MaxT :: non_neg_integer()},
-    [ChildSpec :: supervisor:child_spec()]
-  }} |
-  ignore |
-  {error, Reason :: term()}).
+    {ok, {SupFlags :: {RestartStrategy :: supervisor:strategy(),
+        MaxR :: non_neg_integer(), MaxT :: non_neg_integer()},
+        [ChildSpec :: supervisor:child_spec()]
+    }} |
+    ignore |
+    {error, Reason :: term()}).
 init([]) ->
-  {ok, {{one_for_one, 3, 10}, []}}.
+    {ok, {{one_for_one, 3, 10}, []}}.
 
 %%%===================================================================
 %%% Internal functions
