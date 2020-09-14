@@ -87,3 +87,9 @@ Usage
 %% 停止服务
 -spec(stop_server(Ref :: any()) -> ok | {error, not_found | timeout}).
 ```
+
+```
+%% 序列化模块要求回调
+-callback(serialize(Msg :: any()) -> Binary :: binary()).
+-callback(deserialize(Binary :: binary()) -> Msg :: any()).
+```

@@ -8,6 +8,10 @@
 %%%-------------------------------------------------------------------
 -module(game_ws_serialize).
 
+%% 消息处理
+-callback(serialize(Msg :: any()) -> Binary :: binary()).
+-callback(deserialize(Binary :: binary()) -> Msg :: any()).
+
 %% API exports
 -export([serialize/1, deserialize/1]).
 

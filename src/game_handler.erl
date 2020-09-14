@@ -37,11 +37,9 @@
 
 %% ping(消息已回复)
 -callback(ping(Payload::binary(), State) -> ack_resutl(State) when State::any()).
--optional_callbacks([ping/2]).
 
 %% pong(消息已回复)
 -callback(pong(Payload::binary(), State) -> ack_resutl(State) when State::any()).
--optional_callbacks([pong/2]).
 
 %% 通信结束(服务器主动断开情况下，返回消息可以发送；非主动断开，返回消息会忽略)
 -callback(close(Reason::any(), State) -> 
@@ -50,11 +48,11 @@
     {reply, Message::binary(), State} | 
     any() 
     when State::any()).
--optional_callbacks([close/2]).
 
 %% 服务结束
 -callback(terminate(Reason::any(), State) -> any() when State::any()).
--optional_callbacks([terminate/2]).
+
+-optional_callbacks([ping/2, pong/2, close/2, terminate/2]).
 
 %% API
 -export([start_link/3, init/4]).
@@ -365,7 +363,7 @@ handle_info({'DOWN', Ref, process, _Object, Reason}, #state{
         true -> erlang:cancel_timer(Old);
         false -> skip
     end,
-    {stop, normal, ok, NewState#state{close_timer = undefined}};
+    {stop, normal, NewState#state{close_timer = undefined}};
 handle_info({'DOWN', Ref, process, _Object, Reason}, #state{
     monitor_ref = Ref,
     shutdown = Shutdown, 

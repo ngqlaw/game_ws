@@ -1,6 +1,6 @@
 {application, game_ws, [
     {description, "An websocket library for special game"},
-    {vsn, "0.2.0"},
+    {vsn, "0.2.1"},
     {registered, []},
     {mod, {game_ws_app, []}},
     {applications, [
