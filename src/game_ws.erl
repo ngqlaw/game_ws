@@ -12,9 +12,7 @@
 -export([start_server/2, stop_server/1]).
 -export([
     send_msg/2, 
-    disconnect/1, disconnect/2,
-    call/2,
-    cast/2
+    disconnect/1, disconnect/2
 ]).
 
 -define(CHILD(Id, Mod, Opt), {Id, {Mod, start_link, [Opt]}, permanent, 5000, supervisor, [Mod]}).
@@ -34,10 +32,10 @@ start_server(Ref, Opt) ->
 -spec(stop_server(Ref :: any()) -> ok | {error, not_found | timeout}).
 stop_server(Ref) ->
     case game_ws_sup_sup:stop_child(Ref) of
-    ok ->
-        cowboy:stop_listener(Ref);
-    Error ->
-        Error
+        ok ->
+            cowboy:stop_listener(Ref);
+        Error ->
+            Error
     end.
 
 %% 发送信息
@@ -51,18 +49,6 @@ disconnect(Server) ->
     disconnect(Server, "").
 disconnect(Server, Msg) ->
     game_handler:event(Server, {"disconnect", Msg}).
-
-%% 发送阻塞消息
--spec(call(Server :: pid(), Event :: any()) -> {error, self_call} | term()).
-call(Server, _Event) when Server == self() ->
-    {error, self_call};
-call(Server, Event) ->
-    game_handler:sys_message(Server, {call, Event}).
-
-%% 发送非阻塞消息
--spec(cast(Server :: pid(), Event :: any()) -> ok).
-cast(Server, Event) ->
-    game_handler:sys_message(Server, {cast, Event}).
 
 %%====================================================================
 %% Internal functions

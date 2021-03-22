@@ -16,31 +16,29 @@ Usage
 | {reply, Reply::term(), Message::any(), State}
 | {stop, Reason::term(), Reply::term(), State}).
 
--type(ack_resutl(State) :: {ok, State} | {reply, Message::binary(), State} | any()).
+-type(ack_resutl(State) :: {ok, State} | {reply, Message::binary(), State} | ok).
 
 %% 初始化进程内存
 -callback(init(Req::map(), pid()) -> {ok, State::any()} | {reply, Reply::binary(), State::any()}
 | {already_started, Handler::pid()} | {already_started, Handler::pid(), Event::term()}
 | {stop, Error::term()}).
 
-函数传入的pid可用来支持以下调用：
-%% 发送信息
+函数传入的pid可用来支持以下调用以及gen_server的cast/call/info消息：
+%% 发送网络信息
 -spec(send_msg(Server :: pid(), Msg :: binary()) -> ok).
-%% 关闭连接
+%% 关闭网络连接
 -spec(disconnect(Server :: pid()) -> ok).
-%% 发送阻塞消息
--spec(call(Server :: pid(), Event :: any()) -> {error, self_call} | term()).
-%% 发送非阻塞消息
--spec(cast(Server :: pid(), Event :: any()) -> ok).
 
 %% 重连
 -callback(reconnect(State::any()) -> {ok, State::any()} | {reply, Reply::binary(), State::any()}
 | {stop, Error::term()}).
 
-%% 消息处理
+%% 网络消息处理
 -callback(handle_tcp(term(), State) -> handle_result(State) when State::any()).
+%% 进程消息处理
 -callback(handle_cast(term(), State) -> handle_result(State) when State::any()).
 -callback(handle_call(term(), State) -> handle_reply_result(State) when State::any()).
+-callback(handle_info(term(), State) -> handle_result(State) when State::any()).
 
 %% ping(消息已回复)
 -callback(ping(Payload::binary(), State) -> ack_resutl(State) when State::any()).
@@ -55,7 +53,7 @@ Usage
   {ok, State} | 
   {reply, Message::binary()} | 
   {reply, Message::binary(), State} | 
-  any() 
+  ok 
   when State::any()).
 -optional_callbacks([close/2]).
 

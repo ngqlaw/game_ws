@@ -28,9 +28,10 @@ start_child(State, ParentPid) ->
 
 stop(Srever) ->
     Children = supervisor:which_children(Srever),
+    StopMsg = {sys_message, {soft_stop_immediately, self()}},
     N = lists:foldl(
         fun({_, Pid, _, _}, Acc) when is_pid(Pid) ->
-            case catch gen_server:call(Pid, {soft_stop_immediately, self()}) of
+            case catch gen_server:call(Pid, StopMsg) of
                 ok -> Acc + 1;
                 _ -> Acc
             end

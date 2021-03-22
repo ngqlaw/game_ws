@@ -8,6 +8,8 @@
 %%%-------------------------------------------------------------------
 -module(game_ws_handler).
 
+-behaviour(cowboy_websocket).
+
 %% cowboy callback function
 -export([init/2]).
 -export([websocket_init/1]).
@@ -69,7 +71,7 @@ do_reply(#{msg_type := MsgType, serialize := Mod} = State, Pid) ->
 
 websocket_handle(Msg, #{pid := Pid, serialize := Mod} = State) when is_pid(Pid) ->
     Message = deserialize(Msg, Mod),
-    game_handler:net_message(Pid, Message),
+    gen_server:cast(Pid, {net_message, Message}),
     {ok, State};
 websocket_handle(_, State) ->
     {ok, State}.
