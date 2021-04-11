@@ -15,6 +15,11 @@
 | {reply, Message::any(), State}
 | {stop, Reason::term(), State}).
 
+-type(handle_tcp_result(State) :: {ok, State}
+| {reply, Message::any(), State}
+| {reconnect, Pid::pid(), State}
+| {stop, Reason::term(), State}).
+
 -type(handle_reply_result(State) :: {ok, Reply::term(), State}
 | {reply, Reply::term(), Message::any(), State}
 | {stop, Reason::term(), Reply::term(), State}).
@@ -31,7 +36,7 @@
 | {stop, Error::term()}).
 
 %% 消息处理
--callback(handle_tcp(term(), State) -> handle_result(State) when State::any()).
+-callback(handle_tcp(term(), State) -> handle_tcp_result(State) when State::any()).
 -callback(handle_cast(term(), State) -> handle_result(State) when State::any()).
 -callback(handle_call(term(), State) -> handle_reply_result(State) when State::any()).
 -callback(handle_info(term(), State) -> handle_result(State) when State::any()).
@@ -106,37 +111,37 @@ init(Starter, Handler, Socket, ParentPid) ->
     {Init, Socket1} = maps:take(init, Socket),
     {Shutdown, NewSocket} = maps:take(shutdown, Socket1),
     case Handler:init(Init, self()) of
-    {ok, HandleState} ->
-        Ref = erlang:monitor(process, ParentPid),
-        proc_lib:init_ack(Starter, {ok, self(), NewSocket}),
-        gen_server:enter_loop(?MODULE, [], #state{
-            monitor_ref = Ref,
-            shutdown = Shutdown,
-            socket_pid = ParentPid,
-            handler = Handler,
-            handler_state = HandleState
-        });
-    {reply, Reply, HandleState} ->
-        Ref = erlang:monitor(process, ParentPid),
-        proc_lib:init_ack(Starter, {ok, self(), NewSocket#{reply => Reply}}),
-        gen_server:enter_loop(?MODULE, [], #state{
-            monitor_ref = Ref,
-            shutdown = Shutdown,
-            socket_pid = ParentPid,
-            handler = Handler,
-            handler_state = HandleState
-        });
-    {already_started, Pid} ->
-        case gen_server:call(Pid, {sys_message, {reconnect, Handler, ParentPid}}) of
-            ok ->
-                proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket}});
-            {reply, Reply} ->
-                proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket#{reply => Reply}}});
-            {error, Error} ->
-                proc_lib:init_ack(Starter, {error, Error})
-        end;
-    {stop, Reason} ->
-        proc_lib:init_ack(Starter, {error, Reason})
+        {ok, HandleState} ->
+            Ref = erlang:monitor(process, ParentPid),
+            proc_lib:init_ack(Starter, {ok, self(), NewSocket}),
+            gen_server:enter_loop(?MODULE, [], #state{
+                monitor_ref = Ref,
+                shutdown = Shutdown,
+                socket_pid = ParentPid,
+                handler = Handler,
+                handler_state = HandleState
+            });
+        {reply, Reply, HandleState} ->
+            Ref = erlang:monitor(process, ParentPid),
+            proc_lib:init_ack(Starter, {ok, self(), NewSocket#{reply => Reply}}),
+            gen_server:enter_loop(?MODULE, [], #state{
+                monitor_ref = Ref,
+                shutdown = Shutdown,
+                socket_pid = ParentPid,
+                handler = Handler,
+                handler_state = HandleState
+            });
+        {already_started, Pid} ->
+            case gen_server:call(Pid, {sys_message, {reconnect, ParentPid}}) of
+                ok ->
+                    proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket}});
+                {reply, Reply} ->
+                    proc_lib:init_ack(Starter, {error, {already_started, Pid, NewSocket#{reply => Reply}}});
+                {error, Error} ->
+                    proc_lib:init_ack(Starter, {error, Error})
+            end;
+        {stop, Reason} ->
+            proc_lib:init_ack(Starter, {error, Reason})
     end.
 
 %%%===================================================================
@@ -176,7 +181,7 @@ init(_) ->
     {stop, Reason :: term(), Reply :: term(), NewState :: #state{}} |
     {stop, Reason :: term(), NewState :: #state{}}).
 %% 系统消息处理
-handle_call({sys_message, {reconnect, Handler, ParentPid}}, _From, #state{
+handle_call({sys_message, {reconnect, ParentPid}}, _From, #state{
     monitor_ref = OldRef,
     socket_pid = SocketPid,
     handler = Handler,
@@ -286,6 +291,11 @@ handle_cast({net_message, {tcp, Msg}}, #state{
         {reply, Message, NewHandlerState} ->
             send_msg(SocketPid, Message),
             {noreply, State#state{handler_state = NewHandlerState}};
+        {reconnect, Pid, NewHandlerState} when Pid /= self() ->
+            game_ws:send_msg(SocketPid, {"reconnect", Pid}),
+            {noreply, State#state{handler_state = NewHandlerState}};
+        {reconnect, _} ->
+            {noreply, State};
         {stop, Reason, NewHandlerState} ->
             NewState = State#state{handler_state = NewHandlerState, close = Reason},
             case do_close(NewState) of

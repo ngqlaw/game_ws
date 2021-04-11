@@ -12,6 +12,11 @@ Usage
 | {reply, Message::any(), State}
 | {stop, Reason::term(), State}).
 
+-type(handle_tcp_result(State) :: {ok, State}
+| {reply, Message::any(), State}
+| {reconnect, Pid::pid(), State}
+| {stop, Reason::term(), State}).
+
 -type(handle_reply_result(State) :: {ok, Reply::term(), State}
 | {reply, Reply::term(), Message::any(), State}
 | {stop, Reason::term(), Reply::term(), State}).
