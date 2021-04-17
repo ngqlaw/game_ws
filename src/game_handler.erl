@@ -276,6 +276,13 @@ handle_call(Msg, _From, #state{
     {noreply, NewState :: #state{}} |
     {noreply, NewState :: #state{}, timeout() | hibernate} |
     {stop, Reason :: term(), NewState :: #state{}}).
+%% 系统消息
+handle_cast({sys_message, {reconnect_done, SocketPid}}, #state{
+    socket_pid = SocketPid
+} = State) ->
+    {stop, normal, State#state{socket_pid = undefined}};
+handle_cast({sys_message, {reconnect_done, _SocketPid}}, State) ->
+    {noreply, State};
 %% 网络信息通信处理
 handle_cast({net_message, {ping, Msg}}, State) ->
     ack(ping, Msg, State);
@@ -424,18 +431,25 @@ handle_info(_Info, State) ->
 %%--------------------------------------------------------------------
 -spec(terminate(Reason :: (normal | shutdown | {shutdown, term()} | term()),
     State :: #state{}) -> term()).
+terminate(_Reason, #state{socket_pid = undefined, close = Reason}) ->
+    case Reason of
+        {shutdown, Pid} ->
+            %% 强制关闭需要回复消息
+            Pid ! ok,
+            ok;
+        _ ->
+            ok
+    end;
 terminate(_Reason, #state{
-    socket_pid = SocketPid,
-    handler = Handler,
-    handler_state = State,
-    close = Reason
-} = State) ->
+    socket_pid = SocketPid, close = Reason,
+    handler = Handler, handler_state = HandlerState
+}) ->
     %% 保证通信进程断开
     disconnect(SocketPid, ""),
     %% 先发送断线消息，再处理进程内容
     case erlang:function_exported(Handler, terminate, 2) of
         true ->
-            Handler:terminate(Reason, State);
+            Handler:terminate(Reason, HandlerState);
         false ->
             ok
     end,

@@ -93,9 +93,11 @@ to_binary(V) when is_binary(V) -> V.
 websocket_info({"send_msg", Msg}, #{msg_type := MsgType, serialize := Mod} = State) ->
     Message = Mod:serialize(Msg),
     {reply, {MsgType, Message}, State};
-websocket_info({"reconnect", Pid}, #{serialize := Mod} = State) ->
-    case gen_server:call(Pid, {sys_message, {reconnect, self()}}) of
+websocket_info({"reconnect", Pid}, #{pid := CurrentPid, serialize := Mod} = State) ->
+    SocketPid = self(),
+    case gen_server:call(Pid, {sys_message, {reconnect, SocketPid}}) of
         ok ->
+            gen_server:cast(CurrentPid, {sys_message, {reconnect_done, SocketPid}}),
             {ok, State#{pid => Pid}};
         {reply, Reply} ->
             do_reply(State#{reply => Reply}, Pid);
