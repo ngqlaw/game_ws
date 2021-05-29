@@ -12,29 +12,26 @@
 -behaviour(supervisor).
 
 %% API
--export([start_link/1, start_child/2, stop/1]).
+-export([start_link/1, start_child/3, stop/2]).
 
 %% Supervisor callbacks
 -export([init/1]).
 
--define(CHILD(Mod, Handler), {Mod, {Mod, start_link, [Handler]}, temporary, 5000, worker, [Mod]}).
+-define(CHILD(Mod), {Mod, {Mod, start_link, []}, temporary, 5000, worker, [Mod]}).
 
 %%%===================================================================
 %%% API functions
 %%%===================================================================
-start_child(State, ParentPid) ->
-    {Srever, NewState} = maps:take(sup_pid, State),
-    supervisor:start_child(Srever, [NewState, ParentPid]).
+start_child(Server, State, SocketPid) ->
+    supervisor:start_child(Server, [State, SocketPid]).
 
-stop(Srever) ->
-    Children = supervisor:which_children(Srever),
-    StopMsg = {sys_message, {soft_stop_immediately, self()}},
+stop(Server, StopMsg) ->
+    Children = supervisor:which_children(Server),
     N = lists:foldl(
         fun({_, Pid, _, _}, Acc) when is_pid(Pid) ->
-            case catch gen_server:call(Pid, StopMsg) of
-                ok -> Acc + 1;
-                _ -> Acc
-            end
+            gen_server:cast(Pid, {stop, StopMsg}),
+            Acc + 1;
+            (_, Acc) -> Acc
         end, 0, Children),
     loop_stop(N). 
 
@@ -88,7 +85,7 @@ init([Opt]) ->
         env => #{dispatch => Dispatch},
         idle_timeout => Timeout
     }),
-    {ok, {{simple_one_for_one, 3, 10}, [?CHILD(game_handler, Module)]}}.
+    {ok, {{simple_one_for_one, 3, 10}, [?CHILD(Module)]}}.
 
 %%%===================================================================
 %%% Internal functions

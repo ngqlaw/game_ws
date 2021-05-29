@@ -11,19 +11,19 @@
 -behaviour(cowboy_websocket).
 
 %% cowboy callback function
--export([init/2]).
--export([websocket_init/1]).
--export([websocket_handle/2]).
--export([websocket_info/2]).
--export([terminate/3]).
+-export([
+    init/2,
+    websocket_init/1,
+    websocket_handle/2,
+    websocket_info/2,
+    terminate/3
+]).
 
+%%%===================================================================
+%%% API
+%%%===================================================================
 init(Req, Opts) ->
-    %% 应用在断开连接后自动关闭时间间隔，0表示立即关闭
-    Shutdown =
-        case proplists:get_value(shutdown, Opts, 0) of
-            N when is_integer(N) -> N;
-            _ -> 0
-        end,
+    %% supervisor pid
     SupPid = proplists:get_value(sup_pid, Opts),
     %% 通信消息格式
     MsgType =
@@ -35,78 +35,77 @@ init(Req, Opts) ->
     %% 序列化模块
     SerializeMod =
         case proplists:get_value(serialize, Opts, game_ws_serialize) of
-            Mod when is_atom(Mod) -> Mod;
+            SMod when is_atom(SMod) -> SMod;
             _ -> game_ws_serialize
         end,
+    %% 登陆模块
+    ConnectMod =
+        case proplists:get_value(connect, Opts, game_ws_connect) of
+            CMod when is_atom(CMod) -> CMod;
+            _ -> game_ws_connect
+        end,
     State = #{
-        init => Req,
         sup_pid => SupPid,
-        shutdown => Shutdown,
+        connect => ConnectMod,
+        data => Req,
         serialize => SerializeMod,
         msg_type => MsgType
     },
     {cowboy_websocket, Req, State}.
 
-websocket_init(#{serialize := Mod} = State) ->
-    case game_ws_sup:start_child(State, self()) of
-        {ok, HandlePid, NewState} ->
-            do_reply(NewState, HandlePid);
-        {error, {already_started, HandlePid, NewState}} ->
-            do_reply(NewState, HandlePid);
-        {error, {reply, Reply}} ->
-            Message = Mod:serialize(Reply),
+websocket_init(#{
+    connect := ConnectMod, data := Req, serialize := Mod
+} = State) ->
+    case ConnectMod:init(Req) of
+        {ok, ConnectState} ->
+            {ok, State#{data => ConnectState}};
+        {error, Msg} ->
+            Message = Mod:serialize(Msg),
             {reply, {close, 1000, Message}, State};
         _ ->
             {stop, State}
     end.
 
-do_reply(#{msg_type := MsgType, serialize := Mod} = State, Pid) ->
-    case maps:take(reply, State) of
-        {Reply, NewState} ->
-            Message = Mod:serialize(Reply),
-            {reply, {MsgType, Message}, NewState#{pid => Pid}};
-        error ->
-            {ok, State#{pid => Pid}}
-    end.
-
-websocket_handle(Msg, #{pid := Pid, serialize := Mod} = State) when is_pid(Pid) ->
-    Message = deserialize(Msg, Mod),
-    gen_server:cast(Pid, {net_message, Message}),
+websocket_handle({_, Msg}, #{
+    pid := Pid, serialize := Mod
+} = State) when is_pid(Pid) ->
+    Message = Mod:deserialize(to_binary(Msg)),
+    gen_server:cast(Pid, {msg, Message}),
     {ok, State};
+websocket_handle({_, Msg}, #{
+    connect := ConnectMod, data := Data,
+    msg_type := MsgType, serialize := Mod
+} = State) ->
+    Message = Mod:deserialize(to_binary(Msg)),
+    case ConnectMod:handle(Message, Data) of
+        {Res, Msg, NewData} ->
+            Message = Mod:serialize(Msg),
+            case handle_res(Res, State#{data => NewData}) of
+                {ok, NewState} ->
+                    {reply, {MsgType, Message}, NewState};
+                {stop, NewState} ->
+                    {reply, {close, 1000, Message}, NewState};
+                stop ->
+                    {stop, State}
+            end;
+        {Res, NewData0} ->
+            case handle_res(Res, NewData0) of
+                {ok, NewState} ->
+                    {ok, NewState};
+                {stop, NewState} ->
+                    {stop, NewState};
+                stop ->
+                    {stop, State}
+            end
+    end;
 websocket_handle(_, State) ->
     {ok, State}.
 
-deserialize(ping, _Mod) ->
-    {ping, []};
-deserialize({ping, Msg}, Mod) ->
-    {ping, Mod:deserialize(to_binary(Msg))};
-deserialize(pong, _Mod) ->
-    {pong, []};
-deserialize({pong, Msg}, Mod) ->
-    {pong, Mod:deserialize(to_binary(Msg))};
-deserialize({_, Msg}, Mod) ->
-    {tcp, Mod:deserialize(to_binary(Msg))}.
-
-to_binary(V) when is_list(V) -> list_to_binary(V);
-to_binary(V) when is_binary(V) -> V. 
-
-websocket_info({"send_msg", Msg}, #{msg_type := MsgType, serialize := Mod} = State) ->
+websocket_info({"send_msg", Msg}, #{
+    msg_type := MsgType, serialize := Mod
+} = State) ->
     Message = Mod:serialize(Msg),
     {reply, {MsgType, Message}, State};
-websocket_info({"reconnect", Pid}, #{pid := CurrentPid, serialize := Mod} = State) ->
-    SocketPid = self(),
-    case gen_server:call(Pid, {sys_message, {reconnect, SocketPid}}) of
-        ok ->
-            gen_server:cast(CurrentPid, {sys_message, {reconnect_done, SocketPid}}),
-            {ok, State#{pid => Pid}};
-        {reply, Reply} ->
-            do_reply(State#{reply => Reply}, Pid);
-        {error, {reply, Reply}} ->
-            Message = Mod:serialize(Reply),
-            {reply, {close, 1000, Message}, State};
-        _ ->
-            {reply, {close, 1000, <<>>}, State}
-    end;
 websocket_info({"disconnect", ""}, State) ->
     {reply, {close, 1000, <<>>}, State};
 websocket_info({"disconnect", Msg}, #{serialize := Mod} = State) ->
@@ -117,3 +116,23 @@ websocket_info(_, State) ->
 
 terminate(_Reason, _Req, _State) ->
     ok.
+
+%%%===================================================================
+%%% Internal functions
+%%%===================================================================
+handle_res(continue, State) ->
+    {ok, State};
+handle_res(ok, #{sup_pid := SupPid, data := Data} = State) ->
+    case game_ws_sup:start_child(SupPid, Data, self()) of
+        {ok, HandlePid} ->
+            {ok, State#{data => undefined, pid => HandlePid}};
+        _ ->
+            stop
+    end;
+handle_res(reconnect, #{data := HandlePid} = State) ->
+    {ok, State#{data => undefined, pid => HandlePid}};
+handle_res(stop, State) ->
+    {stop, State}.
+
+to_binary(V) when is_list(V) -> list_to_binary(V);
+to_binary(V) when is_binary(V) -> V. 

@@ -29,26 +29,31 @@ start_server(Ref, Opt) ->
     game_ws_sup_sup:start_child(Child).
 
 %% 停止服务
--spec(stop_server(Ref :: any()) -> ok | {error, not_found | timeout}).
+-spec(stop_server(Ref :: any()) ->
+    ok | {error, not_found | timeout}).
 stop_server(Ref) ->
-    case game_ws_sup_sup:stop_child(Ref) of
+    stop_server(Ref, undefined).
+-spec(stop_server(Ref :: any(), StopMsg::term()) ->
+    ok | {error, not_found | timeout}).
+stop_server(Ref, StopMsg) ->
+    case cowboy:stop_listener(Ref) of
         ok ->
-            cowboy:stop_listener(Ref);
+            game_ws_sup_sup:stop_child(Ref, StopMsg);
         Error ->
             Error
     end.
 
 %% 发送信息
--spec(send_msg(Server :: pid(), Msg :: binary()) -> ok).
-send_msg(Server, Msg) ->
-    game_handler:event(Server, {"send_msg", Msg}).
+-spec(send_msg(SocketPid :: pid(), Msg :: binary()) -> ok).
+send_msg(SocketPid, Msg) ->
+    erlang:send(SocketPid, {"send_msg", Msg}).
 
 %% 关闭连接
--spec(disconnect(Server :: pid()) -> ok).
-disconnect(Server) ->
-    disconnect(Server, "").
-disconnect(Server, Msg) ->
-    game_handler:event(Server, {"disconnect", Msg}).
+-spec(disconnect(SocketPid :: pid()) -> ok).
+disconnect(SocketPid) ->
+    disconnect(SocketPid, "").
+disconnect(SocketPid, Msg) ->
+    erlang:send(SocketPid, {"disconnect", Msg}).
 
 %%====================================================================
 %% Internal functions
