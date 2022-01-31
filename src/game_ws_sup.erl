@@ -103,6 +103,10 @@ normalize_options([{shutdown, V}|T], Opt) ->
     normalize_options(T, [{shutdown, V}|Opt]);
 normalize_options([{msg_type, V}|T], Opt) ->
     normalize_options(T, [{msg_type, V}|Opt]);
+normalize_options([{serialize, V}|T], Opt) ->
+    normalize_options(T, [{serialize, V}|Opt]);
+normalize_options([{connect, V}|T], Opt) ->
+    normalize_options(T, [{connect, V}|Opt]);
 normalize_options([_|T], Opt) ->
     normalize_options(T, Opt);
 normalize_options([], Opt) -> Opt.
